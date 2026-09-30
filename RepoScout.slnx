@@ -2,4 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/RepoScout.Api/RepoScout.Api.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/RepoScout.Api.IntegrationTests/RepoScout.Api.IntegrationTests.csproj" />
+  </Folder>
 </Solution>
