@@ -1,0 +1,5 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/RepoScout.Api/RepoScout.Api.csproj" />
+  </Folder>
+</Solution>
