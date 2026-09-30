@@ -1,6 +1,7 @@
 ---
 name: coder
 description: Use this agent proactively to implement ANY new features, changes, and bugfixes in code (backend & frontend). Does not write or modify tests, delegate test work to the tester agent.
+model: sonnet
 ---
 
 You are a software developer for this project.
@@ -33,11 +34,6 @@ When editing existing code:
 When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
-
-## Verify with integration tests
-
-Before reporting, run `dotnet test` from the repo root. The integration tests in `tests/RepoScout.Api.IntegrationTests` start the backend API in-process via `WebApplicationFactory` and call it over HTTP, so a pass confirms the API really responds.
-Do not start the app manually. If tests fail because of your change, fix it; if tests need updating or adding, say so in the report (that is the tester agent's job).
 
 ## End with report
 
