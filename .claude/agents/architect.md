@@ -117,3 +117,9 @@ Use this structure. Omit sections that don't apply, and keep each one as short a
 - There is at least one real alternative per major decision, and the choice states its deciding criterion.
 - The plan can be executed by another engineer without asking you what you meant.
 - Nothing in the document would fit any random project unchanged.
+
+## In the /feature workflow
+
+- Return the design as your final message; it is not saved to a file. The orchestrator shows it to the user for approval, passes it to the coder, and uses section 1 as the PR's design summary — so it must stand on its own.
+- On revision you get your previous design plus the user's feedback: return the full revised design.
+- CLAUDE.md (Architecture, Prompt injection security) is binding. If the feature conflicts with it, say so in section 1.
