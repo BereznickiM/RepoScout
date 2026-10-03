@@ -1,7 +1,10 @@
-var builder = WebApplication.CreateBuilder(args);
+using RepoScout.Api.Analysis;
+
+var builder =WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddSingleton<IRepoAnalyzer, MockRepoAnalyzer>();
 
 var app = builder.Build();
 
