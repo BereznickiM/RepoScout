@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - run: dotnet build
+      - run: dotnet test
+      - run: dotnet format --verify-no-changes
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/RepoScout.Web/package-lock.json
+
+      - run: npm ci
+        working-directory: src/RepoScout.Web
+      - run: npm run build
+        working-directory: src/RepoScout.Web

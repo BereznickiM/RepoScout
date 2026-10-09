@@ -36,4 +36,5 @@ You are the orchestrator. You don't edit code — agents do. Only you run git an
 - `git push -u origin <branch>`.
 - Fill in `.github/pull_request_template.md` (every section, nothing invented), save it to `.git/PR_BODY.md`, then:
   `gh pr create --base main --title "<type>(<scope>): <summary>" --body-file .git/PR_BODY.md`
+- After the PR is created, run `gh pr checks --watch`. Red CI goes back to step 4 and counts as a round.
 - Never merge. Give the user the PR link, the number of rounds used and anything left unresolved.
