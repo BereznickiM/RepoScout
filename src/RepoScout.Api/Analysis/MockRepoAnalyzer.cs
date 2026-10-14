@@ -1,31 +1,33 @@
+using System.Text;
+using RepoScout.Api.GitHub;
+
 namespace RepoScout.Api.Analysis;
 
-public sealed class MockRepoAnalyzer : IRepoAnalyzer
+public sealed class MockRepoAnalyzer(IGitHubClient github) : IRepoAnalyzer
 {
-    public Task<string> AnalyzeAsync(RepoRef repo, string question, CancellationToken ct)
+    private const int MaxDepth = 2;
+
+    public async Task<string> AnalyzeAsync(RepoRef repo, string question, CancellationToken ct)
     {
-        var quotedQuestion = string.Join("\n> ", question.ReplaceLineEndings("\n").Split('\n'));
+        var info = await github.GetRepoAsync(repo, ct);
+        var tree = await github.GetTreeAsync(repo, info.DefaultBranch, ct);
 
-        var report = $"""
-            # Report for {repo.Owner}/{repo.Name}
+        var report = new StringBuilder();
+        report.Append("# Folder structure of ").Append(info.FullName).Append("\n\n");
 
-            *This is a mocked response. No repository was inspected.*
+        var directories = tree.Entries
+            .Where(e => e.Kind == RepoTreeEntryKind.Directory)
+            .Select(e => e.Path)
+            .Where(p => p.Count(c => c == '/') < MaxDepth)
+            .OrderBy(p => p.Replace('/', '\0'), StringComparer.Ordinal); // keeps children right after their parent
 
-            > {quotedQuestion}
+        foreach (var path in directories)
+        {
+            var depth = path.Count(c => c == '/');
+            var name = path[(path.LastIndexOf('/') + 1)..];
+            report.Append(' ', depth * 2).Append("- `").Append(name).Append("/`\n");
+        }
 
-            ## Findings
-
-            - The project appears to contain a `src/Program.cs` entry point
-            - Dependencies are declared in a manifest file
-            - Documentation lives in the README
-
-            ## Example snippet
-
-            ```csharp
-            Console.WriteLine("Hello from the mock analyzer");
-            ```
-            """;
-
-        return Task.FromResult(report);
+        return report.ToString();
     }
 }

@@ -7,7 +7,7 @@ using RepoScout.Api.Analysis;
 
 namespace RepoScout.Api.GitHub;
 
-public sealed class GitHubClient(HttpClient http)
+public sealed class GitHubClient(HttpClient http) : IGitHubClient
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
