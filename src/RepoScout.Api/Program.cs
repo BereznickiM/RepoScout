@@ -1,10 +1,12 @@
 using RepoScout.Api.Analysis;
+using RepoScout.Api.GitHub;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IRepoAnalyzer, MockRepoAnalyzer>();
+builder.Services.AddGitHubClient();
 
 var app = builder.Build();
 
