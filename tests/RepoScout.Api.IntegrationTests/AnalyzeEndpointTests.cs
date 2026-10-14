@@ -3,6 +3,10 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using RepoScout.Api.Analysis;
+using RepoScout.Api.GitHub;
 
 namespace RepoScout.Api.IntegrationTests;
 
@@ -13,21 +17,44 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
 
     public AnalyzeEndpointTests(WebApplicationFactory<Program> factory)
     {
-        _client = factory.CreateClient();
+        _client = factory
+            .WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IGitHubClient>(new FakeGitHubClient())))
+            .CreateClient();
+    }
+
+    private sealed class FakeGitHubClient : IGitHubClient
+    {
+        public Task<RepoInfo> GetRepoAsync(RepoRef repo, CancellationToken ct) =>
+            Task.FromResult(new RepoInfo("o/r", null, "main", null));
+
+        public Task<RepoTree> GetTreeAsync(RepoRef repo, string gitRef, CancellationToken ct) =>
+            Task.FromResult(new RepoTree(
+                [
+                    new RepoTreeEntry("src", RepoTreeEntryKind.Directory, null),
+                    new RepoTreeEntry("src/app", RepoTreeEntryKind.Directory, null),
+                    new RepoTreeEntry("src/app/deep", RepoTreeEntryKind.Directory, null),
+                    new RepoTreeEntry("README.md", RepoTreeEntryKind.File, 10)
+                ],
+                false));
+
+        public Task<RepoFile> GetFileAsync(RepoRef repo, string path, string gitRef, int maxBytes, CancellationToken ct) =>
+            throw new NotSupportedException();
     }
 
     private Task<HttpResponseMessage> Post(object body) => _client.PostAsJsonAsync("/api/analyze", body);
 
     [Fact]
-    public async Task PostAnalyze_ValidRequest_ReturnsMockReportWithRepoAndQuestion()
+    public async Task PostAnalyze_ValidRequest_ReturnsFolderTreeReportForRepo()
     {
         var response = await Post(new { repoUrl = ValidUrl, question = "What stack is used?" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var report = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("report").GetString();
         Assert.Contains("o/r", report);
-        Assert.Contains("mocked", report);
-        Assert.Contains("> What stack is used?", report);
+        Assert.Contains("- `src/`", report);
+        Assert.Contains("  - `app/`", report);
+        Assert.DoesNotContain("deep", report);
+        Assert.DoesNotContain("README.md", report);
     }
 
     [Fact]
@@ -35,8 +62,7 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     {
         var response = await Post(new { repoUrl = ValidUrl, question = "  hi  " });
 
-        var report = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("report").GetString();
-        Assert.Contains("> hi\n", report!.ReplaceLineEndings("\n"));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -44,8 +70,7 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     {
         var response = await Post(new { repoUrl = ValidUrl, question = "line1\nline2" });
 
-        var report = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("report").GetString();
-        Assert.Contains("> line1\n> line2", report!.ReplaceLineEndings("\n"));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
