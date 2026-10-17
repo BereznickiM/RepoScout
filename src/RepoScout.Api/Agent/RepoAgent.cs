@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using RepoScout.Api.Analysis;
@@ -25,8 +26,39 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
     private static readonly string BudgetExhaustedNote =
         $"\n\n> Note: analysis stopped after {MaxToolCalls} tool calls; parts of the repository were not inspected.";
 
-    public async Task<string> AnalyzeAsync(RepoRef repo, string question, CancellationToken ct)
+    public async Task<AnalysisResult> AnalyzeAsync(RepoRef repo, string question, CancellationToken ct)
     {
+        var stopwatch = Stopwatch.StartNew();
+        var rounds = 0;
+        var byName = new Dictionary<string, int>();
+        long? inputTokens = null, outputTokens = null, totalTokens = null;
+        var used = 0;
+
+        async Task<ChatResponse> AskAsync(List<ChatMessage> history, ChatOptions chatOptions)
+        {
+            var response = await chat.GetResponseAsync(history, chatOptions, ct);
+            rounds++;
+            if (response.Usage is { } u)
+            {
+                inputTokens = Sum(inputTokens, u.InputTokenCount);
+                outputTokens = Sum(outputTokens, u.OutputTokenCount);
+                totalTokens = Sum(totalTokens, u.TotalTokenCount ?? (u.InputTokenCount is { } i && u.OutputTokenCount is { } o ? i + o : null));
+            }
+
+            return response;
+        }
+
+        AnalysisResult Finish(string report, bool exhausted)
+        {
+            stopwatch.Stop();
+            var usage = new AnalysisUsage(
+                rounds, used, byName, inputTokens, outputTokens, totalTokens, stopwatch.ElapsedMilliseconds, exhausted);
+            logger.LogInformation(
+                "Analysis finished: {Rounds} rounds, {ToolCalls} tool calls, tokens {InputTokens}/{OutputTokens}/{TotalTokens}, {DurationMs} ms, budget exhausted: {Exhausted}",
+                rounds, used, inputTokens, outputTokens, totalTokens, usage.DurationMs, exhausted);
+            return new AnalysisResult(report, usage);
+        }
+
         var info = await github.GetRepoAsync(repo, ct);
         var tools = new RepoTools(github, repo, info.DefaultBranch);
         var functions = tools.Functions.OfType<AIFunction>().ToDictionary(f => f.Name);
@@ -42,19 +74,17 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
         ];
 
         var options = new ChatOptions { Tools = tools.Functions, ToolMode = ChatToolMode.Auto };
-        var used = 0;
 
         // Each turn with tool calls raises `used` by at least one, so the loop is bounded by the budget.
         while (used < MaxToolCalls)
         {
-            var response = await chat.GetResponseAsync(messages, options, ct);
+            var response = await AskAsync(messages, options);
             messages.AddRange(response.Messages);
 
             var calls = response.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>().ToList();
             if (calls.Count == 0)
             {
-                logger.LogInformation("Analysis finished: {ToolCalls} tool calls used, budget exhausted: {Exhausted}", used, false);
-                return response.Text;
+                return Finish(response.Text, false);
             }
 
             var results = new List<AIContent>();
@@ -64,6 +94,8 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
                 if (used < MaxToolCalls)
                 {
                     used++;
+                    var key = functions.ContainsKey(call.Name) ? call.Name : "(unknown)";
+                    byName[key] = byName.GetValueOrDefault(key) + 1;
                 }
             }
 
@@ -71,12 +103,13 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
         }
 
         messages.Add(new ChatMessage(ChatRole.User, BudgetExhaustedPrompt));
-        var final = await chat.GetResponseAsync(
-            messages, new ChatOptions { Tools = tools.Functions, ToolMode = ChatToolMode.None }, ct);
+        var final = await AskAsync(
+            messages, new ChatOptions { Tools = tools.Functions, ToolMode = ChatToolMode.None });
 
-        logger.LogInformation("Analysis finished: {ToolCalls} tool calls used, budget exhausted: {Exhausted}", used, true);
-        return final.Text + BudgetExhaustedNote;
+        return Finish(final.Text + BudgetExhaustedNote, true);
     }
+
+    private static long? Sum(long? current, long? add) => add is null ? current : (current ?? 0) + add;
 
     private async Task<string> InvokeAsync(
         FunctionCallContent call, Dictionary<string, AIFunction> functions, bool budgetExhausted, CancellationToken ct)
