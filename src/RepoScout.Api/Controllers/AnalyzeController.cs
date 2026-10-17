@@ -16,7 +16,7 @@ public class AnalyzeController(IRepoAnalyzer analyzer) : ControllerBase
             return ValidationProblem();
         }
 
-        var report = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), HttpContext.RequestAborted);
-        return Ok(new AnalyzeResponse(report));
+        var result = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), HttpContext.RequestAborted);
+        return Ok(new AnalyzeResponse(result.Report, result.Usage));
     }
 }
