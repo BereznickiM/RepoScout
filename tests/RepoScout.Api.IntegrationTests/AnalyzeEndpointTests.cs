@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
@@ -13,13 +14,39 @@ namespace RepoScout.Api.IntegrationTests;
 public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>>
 {
     private const string ValidUrl = "https://github.com/o/r";
+    private const string CannedReport = "# Canned report\n\nUses `src/app`.";
     private readonly HttpClient _client;
 
     public AnalyzeEndpointTests(WebApplicationFactory<Program> factory)
     {
         _client = factory
-            .WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IGitHubClient>(new FakeGitHubClient())))
+            .WithWebHostBuilder(b =>
+            {
+                b.UseSetting("AiModel:ApiKey", "test-key");
+                b.ConfigureTestServices(s =>
+                {
+                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
+                    s.AddSingleton<IChatClient>(new FakeChatClient());
+                });
+            })
             .CreateClient();
+    }
+
+    private sealed class FakeChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new ChatResponse(new ChatMessage(ChatRole.Assistant, CannedReport)));
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 
     private sealed class FakeGitHubClient : IGitHubClient
@@ -44,17 +71,13 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     private Task<HttpResponseMessage> Post(object body) => _client.PostAsJsonAsync("/api/analyze", body);
 
     [Fact]
-    public async Task PostAnalyze_ValidRequest_ReturnsFolderTreeReportForRepo()
+    public async Task PostAnalyze_ValidRequest_ReturnsReportFromChatClient()
     {
         var response = await Post(new { repoUrl = ValidUrl, question = "What stack is used?" });
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var report = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("report").GetString();
-        Assert.Contains("o/r", report);
-        Assert.Contains("- `src/`", report);
-        Assert.Contains("  - `app/`", report);
-        Assert.DoesNotContain("deep", report);
-        Assert.DoesNotContain("README.md", report);
+        Assert.Equal(CannedReport, report);
     }
 
     [Fact]
