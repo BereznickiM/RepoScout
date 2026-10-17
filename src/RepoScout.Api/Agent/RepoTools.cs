@@ -26,7 +26,7 @@ public sealed class RepoTools
         [
             AIFunctionFactory.Create(
                 (string path = "", CancellationToken ct = default) => ListFilesAsync(path, ct), "list_files",
-                "Lists files and directories under path (repo root if empty), up to 2 levels deep. Noise directories are hidden."),
+                $"Lists files and directories under path (repo root if empty), up to {MaxDepth} levels deep. Noise directories are hidden."),
             AIFunctionFactory.Create(
                 (string path, CancellationToken ct = default) => ReadFileAsync(path, ct), "read_file",
                 $"Returns the content of a file (first {MaxResultBytes:N0} bytes).")
