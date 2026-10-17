@@ -81,6 +81,22 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     }
 
     [Fact]
+    public async Task PostAnalyze_ValidRequest_ReturnsUsageWithCamelCaseKeys()
+    {
+        var response = await Post(new { repoUrl = ValidUrl, question = "q" });
+
+        var usage = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("usage");
+        Assert.Equal(1, usage.GetProperty("rounds").GetInt32());
+        Assert.Equal(0, usage.GetProperty("toolCalls").GetInt32());
+        Assert.Equal(JsonValueKind.Object, usage.GetProperty("toolCallsByName").ValueKind);
+        Assert.Equal(JsonValueKind.Null, usage.GetProperty("inputTokens").ValueKind);
+        Assert.Equal(JsonValueKind.Null, usage.GetProperty("outputTokens").ValueKind);
+        Assert.Equal(JsonValueKind.Null, usage.GetProperty("totalTokens").ValueKind);
+        Assert.True(usage.GetProperty("durationMs").GetInt64() >= 0);
+        Assert.False(usage.GetProperty("budgetExhausted").GetBoolean());
+    }
+
+    [Fact]
     public async Task PostAnalyze_QuestionWithSurroundingWhitespace_IsTrimmedInReport()
     {
         var response = await Post(new { repoUrl = ValidUrl, question = "  hi  " });
