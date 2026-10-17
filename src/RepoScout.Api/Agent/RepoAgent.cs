@@ -44,7 +44,8 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
         var options = new ChatOptions { Tools = tools.Functions, ToolMode = ChatToolMode.Auto };
         var used = 0;
 
-        while (true)
+        // Each turn with tool calls raises `used` by at least one, so the loop is bounded by the budget.
+        while (used < MaxToolCalls)
         {
             var response = await chat.GetResponseAsync(messages, options, ct);
             messages.AddRange(response.Messages);
@@ -67,11 +68,6 @@ public sealed class RepoAgent(IChatClient chat, IGitHubClient github, ILogger<Re
             }
 
             messages.Add(new ChatMessage(ChatRole.Tool, results));
-
-            if (used >= MaxToolCalls)
-            {
-                break;
-            }
         }
 
         messages.Add(new ChatMessage(ChatRole.User, BudgetExhaustedPrompt));
