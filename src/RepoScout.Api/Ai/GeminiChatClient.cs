@@ -122,7 +122,12 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
             throw new InvalidOperationException($"No function_call for call_id {result.CallId}");
         }
 
-        var text = result.Result as string ?? JsonSerializer.Serialize(result.Result, JsonOptions);
+        var text = result.Result switch
+        {
+            string s => s,
+            JsonElement { ValueKind: JsonValueKind.String } e => e.GetString()!,
+            _ => JsonSerializer.Serialize(result.Result, JsonOptions)
+        };
         return new FunctionResultStep(name, result.CallId, [new TextPart(text)]);
     }
 

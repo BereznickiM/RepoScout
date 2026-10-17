@@ -334,6 +334,19 @@ public class GeminiChatClientTests
     }
 
     [Fact]
+    public async Task GetResponseAsync_JsonElementStringToolResult_IsSentAsPlainTextNotQuotedJson()
+    {
+        var h = CreateOk();
+        var assistant = new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "get_x")]);
+        var tool = new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", J("\"line1\\nsaid \\\"hi\\\"\""))]);
+
+        await h.Client.GetResponseAsync([User(), assistant, tool]);
+
+        var result = h.Bodies.Single().GetProperty("input").EnumerateArray().Last();
+        Assert.Equal("line1\nsaid \"hi\"", result.GetProperty("result")[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
     public async Task GetResponseAsync_ToolResultWithUnknownCallId_ThrowsInvalidOperationAndSendsNothing()
     {
         var h = CreateOk();
