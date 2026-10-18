@@ -139,7 +139,10 @@ async function submit() {
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
     <p class="sr-only" role="status" aria-live="polite">{{ statusText }}</p>
 
-    <section v-if="report" class="field output" aria-labelledby="result-label">
+  </main>
+
+  <div v-if="report" class="results">
+    <section class="field output" aria-labelledby="result-label">
       <h2 id="result-label" class="label">
         <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path class="f-c" d="M6 10 C6 7 8 5 11 5 L37 6 C40 6 42 8 42 11 L41 37 C41 40 39 42 36 42 L10 41 C7 41 5 39 5 36 Z"/>
@@ -153,7 +156,7 @@ async function submit() {
       <div class="report" v-html="renderedReport"></div>
     </section>
 
-    <section v-if="report && usage" class="field usage" aria-labelledby="usage-label">
+    <section v-if="usage" class="field usage" aria-labelledby="usage-label">
       <h2 id="usage-label" class="label">
         <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path class="f-a" d="M6 10 C6 7 8 5 11 5 L37 6 C40 6 42 8 42 11 L41 37 C41 40 39 42 36 42 L10 41 C7 41 5 39 5 36 Z"/>
@@ -179,5 +182,5 @@ async function submit() {
         <p v-if="usage.budgetExhausted" class="usage-note">Tool budget ran out - the report may be partial.</p>
       </div>
     </section>
-  </main>
+  </div>
 </template>
