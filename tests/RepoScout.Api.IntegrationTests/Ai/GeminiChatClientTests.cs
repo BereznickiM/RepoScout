@@ -220,6 +220,29 @@ public class GeminiChatClientTests
     }
 
     [Fact]
+    public async Task GetResponseAsync_ResponseWithUsage_MapsTokenCounts()
+    {
+        var h = CreateOk("""{"id":"i","steps":[{"type":"model_output","content":[{"type":"text","text":"t"}]}],"usage":{"total_input_tokens":11,"total_output_tokens":4,"total_tokens":15}}""");
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.NotNull(response.Usage);
+        Assert.Equal(11, response.Usage.InputTokenCount);
+        Assert.Equal(4, response.Usage.OutputTokenCount);
+        Assert.Equal(15, response.Usage.TotalTokenCount);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ResponseWithoutUsage_UsageIsNull()
+    {
+        var h = CreateOk();
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.Null(response.Usage);
+    }
+
+    [Fact]
     public async Task GetResponseAsync_FunctionCallResponse_ReturnsFunctionCallAndToolCallsFinish()
     {
         var h = CreateOk("""{"id":"i","steps":[{"type":"function_call","id":"c1","name":"get_x","arguments":{"a":1,"b":"s"}}]}""");

@@ -8,7 +8,23 @@ export class AnalyzeError extends Error {
   }
 }
 
-export async function analyze(repoUrl: string, question: string): Promise<string> {
+export type AnalysisUsage = {
+  rounds: number
+  toolCalls: number
+  toolCallsByName: Record<string, number>
+  inputTokens: number | null
+  outputTokens: number | null
+  totalTokens: number | null
+  durationMs: number
+  budgetExhausted: boolean
+}
+
+export type AnalyzeResult = {
+  report: string
+  usage: AnalysisUsage
+}
+
+export async function analyze(repoUrl: string, question: string): Promise<AnalyzeResult> {
   let res: Response
   try {
     res = await fetch('/api/analyze', {
@@ -21,7 +37,7 @@ export async function analyze(repoUrl: string, question: string): Promise<string
   }
 
   if (res.ok) {
-    return ((await res.json()) as { report: string }).report
+    return (await res.json()) as AnalyzeResult
   }
 
   if (res.status === 400) {

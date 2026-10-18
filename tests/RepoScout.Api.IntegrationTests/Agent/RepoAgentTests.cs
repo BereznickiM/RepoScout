@@ -117,7 +117,7 @@ public class RepoAgentTests
         var chat = new ScriptedChatClient(_ => Text("# Answer"));
         var github = Github();
 
-        var report = await Agent(chat, github).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, github).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Equal("# Answer", report);
         Assert.Equal(1, github.RepoCalls);
@@ -244,7 +244,7 @@ public class RepoAgentTests
         var assistant = Calls(Call("a", "list_files", ""), Call("b", "read_file", "README.md"));
         var chat = new ScriptedChatClient(i => i == 0 ? assistant : Text("final"));
 
-        var report = await Agent(chat, github).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, github).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Equal("final", report);
         Assert.Equal(2, chat.Calls.Count);
@@ -289,7 +289,7 @@ public class RepoAgentTests
     {
         var chat = new ScriptedChatClient(i => i < 20 ? ListTurn(i) : Text("partial report"));
 
-        var report = await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Equal(21, chat.Calls.Count);
         var last = chat.Calls[^1];
@@ -306,7 +306,7 @@ public class RepoAgentTests
         // The 20th call exhausts the budget, so the next request is the forced final one.
         var chat = new ScriptedChatClient(i => i < 20 ? ListTurn(i) : Text("report"));
 
-        var report = await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Contains(BudgetNote, report);
     }
@@ -316,7 +316,7 @@ public class RepoAgentTests
     {
         var chat = new ScriptedChatClient(i => i < 19 ? ListTurn(i) : Text("report"));
 
-        var report = await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Equal("report", report);
         Assert.Equal(20, chat.Calls.Count);
@@ -354,7 +354,7 @@ public class RepoAgentTests
     {
         var chat = new ScriptedChatClient(i => i < 20 ? Calls(Call($"c{i}", "nope", "")) : Text("partial"));
 
-        var report = await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         Assert.Equal(21, chat.Calls.Count);
         Assert.Equal(ChatToolMode.None, chat.Calls[^1].Options!.ToolMode);
@@ -369,7 +369,7 @@ public class RepoAgentTests
             .ToArray();
         var chat = new ScriptedChatClient(i => i == 0 ? Calls(calls) : Text("report"));
 
-        var report = await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None);
+        var report = (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Report;
 
         var results = ToolResults(chat.Calls[1]).ToList();
         Assert.Equal(22, results.Count);
@@ -378,6 +378,140 @@ public class RepoAgentTests
         Assert.Equal(2, results.Count(r => (string)r.Result! == "Error: tool budget exhausted"));
         Assert.Equal(2, chat.Calls.Count);
         Assert.EndsWith(BudgetNote, report);
+    }
+
+    // ---- usage stats ----
+
+    private static ChatResponse WithUsage(ChatResponse response, long? input, long? output, long? total)
+    {
+        response.Usage = new UsageDetails { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = total };
+        return response;
+    }
+
+    private static async Task<AnalysisUsage> RunUsage(ScriptedChatClient chat) =>
+        (await Agent(chat, Github()).AnalyzeAsync(Repo, "q", CancellationToken.None)).Usage;
+
+    [Fact]
+    public async Task AnalyzeAsync_NoTools_UsageHasOneRoundAndNoToolCalls()
+    {
+        var usage = await RunUsage(new ScriptedChatClient(_ => Text("r")));
+
+        Assert.Equal(1, usage.Rounds);
+        Assert.Equal(0, usage.ToolCalls);
+        Assert.Empty(usage.ToolCallsByName);
+        Assert.False(usage.BudgetExhausted);
+        Assert.True(usage.DurationMs >= 0);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_UsageInTwoRounds_SumsEachField()
+    {
+        var chat = new ScriptedChatClient(i => i == 0
+            ? WithUsage(ListTurn(0), 10, 2, 12)
+            : WithUsage(Text("r"), 10, 2, 12));
+
+        var usage = await RunUsage(chat);
+
+        Assert.Equal(2, usage.Rounds);
+        Assert.Equal(20, usage.InputTokens);
+        Assert.Equal(4, usage.OutputTokens);
+        Assert.Equal(24, usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_NoUsageReported_TokenFieldsAreNull()
+    {
+        var usage = await RunUsage(new ScriptedChatClient(i => i == 0 ? ListTurn(0) : Text("r")));
+
+        Assert.Null(usage.InputTokens);
+        Assert.Null(usage.OutputTokens);
+        Assert.Null(usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_UsageInOnlyOneRound_UsesThatRoundsValues()
+    {
+        var chat = new ScriptedChatClient(i => i == 0 ? ListTurn(0) : WithUsage(Text("r"), 7, 3, 10));
+
+        var usage = await RunUsage(chat);
+
+        Assert.Equal(7, usage.InputTokens);
+        Assert.Equal(3, usage.OutputTokens);
+        Assert.Equal(10, usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_TotalMissingButInputAndOutputPresent_TotalIsDerivedFromThem()
+    {
+        var usage = await RunUsage(new ScriptedChatClient(_ => WithUsage(Text("r"), 7, 3, null)));
+
+        Assert.Equal(10, usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_UsageWithOnlyOutputTokens_InputAndTotalStayNull()
+    {
+        var usage = await RunUsage(new ScriptedChatClient(_ => WithUsage(Text("r"), null, 5, null)));
+
+        Assert.Null(usage.InputTokens);
+        Assert.Equal(5, usage.OutputTokens);
+        Assert.Null(usage.TotalTokens);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_BudgetExhausted_UsageCountsFinalRoundAndCapsToolCalls()
+    {
+        var chat = new ScriptedChatClient(i => i < 20 ? ListTurn(i) : Text("partial"));
+
+        var usage = await RunUsage(chat);
+
+        Assert.Equal(21, usage.Rounds);
+        Assert.Equal(20, usage.ToolCalls);
+        Assert.Equal(new Dictionary<string, int> { ["list_files"] = 20 }, usage.ToolCallsByName);
+        Assert.True(usage.BudgetExhausted);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_25CallsInOneTurn_UsageCountsOnly20ToolCallsInTwoRounds()
+    {
+        var calls = Enumerable.Range(0, 25).Select(i => Call($"c{i}", "list_files", "")).ToArray();
+
+        var usage = await RunUsage(new ScriptedChatClient(i => i == 0 ? Calls(calls) : Text("report")));
+
+        Assert.Equal(20, usage.ToolCalls);
+        Assert.Equal(2, usage.Rounds);
+        Assert.Equal(20, usage.ToolCallsByName["list_files"]);
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_KnownAndUnknownTools_GroupsUnknownUnderPlaceholderNotModelName()
+    {
+        var calls = new[]
+        {
+            Call("a", "list_files", ""), Call("b", "read_file", "README.md"), Call("c", "list_files", ""),
+            Call("d", "delete_repo", "x"), Call("e", "nope", "")
+        };
+        var github = Github(file: p => new RepoFile(p, "x", false));
+        var chat = new ScriptedChatClient(i => i == 0 ? Calls(calls) : Text("report"));
+
+        var usage = (await Agent(chat, github).AnalyzeAsync(Repo, "q", CancellationToken.None)).Usage;
+
+        Assert.Equal(
+            new Dictionary<string, int> { ["list_files"] = 2, ["read_file"] = 1, ["(unknown)"] = 2 },
+            usage.ToolCallsByName);
+        Assert.Equal(5, usage.ToolCalls);
+        Assert.False(usage.ToolCallsByName.ContainsKey("delete_repo"));
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_InvalidArgumentCall_CountsAsToolCallByName()
+    {
+        var chat = new ScriptedChatClient(i => i == 0 ? Calls(Call("a", "read_file")) : Text("report"));
+
+        var usage = await RunUsage(chat);
+
+        Assert.Equal(1, usage.ToolCalls);
+        Assert.Equal(1, usage.ToolCallsByName["read_file"]);
     }
 
     // ---- list_files ----

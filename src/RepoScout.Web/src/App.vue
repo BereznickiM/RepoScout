@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { analyze, AnalyzeError } from './api'
+import { computed, ref } from 'vue'
+import { analyze, AnalyzeError, type AnalysisUsage } from './api'
 import { renderMarkdown } from './markdown'
 
 const repoUrl = ref('')
@@ -9,14 +9,35 @@ const loading = ref(false)
 const error = ref('')
 const fieldErrors = ref<Record<string, string[]>>({})
 const report = ref('')
+const usage = ref<AnalysisUsage | null>(null)
+
+const usageText = computed(() => {
+  const u = usage.value
+  if (!u) return ''
+  const tokens = (n: number | null) => (n === null ? 'n/a' : n.toLocaleString())
+  const byTool = Object.entries(u.toolCallsByName)
+    .map(([name, count]) => `${name} ${count}`)
+    .join(', ')
+  const parts = [
+    `${u.rounds.toLocaleString()} rounds`,
+    `${u.toolCalls.toLocaleString()} tool calls${byTool ? ` (${byTool})` : ''}`,
+    `tokens ${tokens(u.inputTokens)} in / ${tokens(u.outputTokens)} out / ${tokens(u.totalTokens)} total`,
+    `${(u.durationMs / 1000).toFixed(1)} s`,
+  ]
+  if (u.budgetExhausted) parts.push('tool budget exhausted')
+  return parts.join(' · ')
+})
 
 async function submit() {
   loading.value = true
   error.value = ''
   fieldErrors.value = {}
   report.value = ''
+  usage.value = null
   try {
-    report.value = await analyze(repoUrl.value.trim(), question.value.trim())
+    const result = await analyze(repoUrl.value.trim(), question.value.trim())
+    report.value = result.report
+    usage.value = result.usage
   } catch (e) {
     if (e instanceof AnalyzeError) {
       error.value = e.message
@@ -59,6 +80,10 @@ async function submit() {
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
     <article v-if="report" class="report" v-html="renderMarkdown(report)"></article>
+
+    <section v-if="report && usage" class="usage">
+      <strong>Usage:</strong> {{ usageText }}
+    </section>
   </main>
 </template>
 
@@ -142,6 +167,12 @@ button:disabled {
   border-radius: 8px;
   background: #f9fafb;
   overflow-wrap: anywhere;
+}
+
+.usage {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #6b7280;
 }
 
 .report :deep(pre) {

@@ -45,6 +45,14 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         {
             ResponseId = dto.Id,
             ModelId = dto.Model ?? model,
+            Usage = dto.Usage is { } u
+                ? new UsageDetails
+                {
+                    InputTokenCount = u.TotalInputTokens,
+                    OutputTokenCount = u.TotalOutputTokens,
+                    TotalTokenCount = u.TotalTokens
+                }
+                : null,
             FinishReason = contents.Any(c => c is FunctionCallContent) ? ChatFinishReason.ToolCalls : ChatFinishReason.Stop
         };
     }
@@ -258,5 +266,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
 
     private sealed record GenerationConfig(string ToolChoice);
 
-    private sealed record InteractionResponse(string? Id, string? Model, List<JsonElement>? Steps);
+    private sealed record InteractionResponse(string? Id, string? Model, List<JsonElement>? Steps, InteractionUsage? Usage);
+
+    private sealed record InteractionUsage(long? TotalInputTokens, long? TotalOutputTokens, long? TotalTokens);
 }
