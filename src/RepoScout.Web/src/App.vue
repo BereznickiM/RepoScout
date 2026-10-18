@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import { analyze, AnalyzeError, type AnalysisUsage } from './api'
 import { renderMarkdown } from './markdown'
 
@@ -11,12 +11,47 @@ const fieldErrors = ref<Record<string, string[]>>({})
 const report = ref('')
 const usage = ref<AnalysisUsage | null>(null)
 
-const renderedReport = computed(() => renderMarkdown(report.value))
+const revealed = ref(0)
+const typing = computed(() => revealed.value < report.value.length)
+let rafId = 0
+
+const renderedReport = computed(() => renderMarkdown(report.value.slice(0, revealed.value)))
 
 const statusText = computed(() => {
   if (loading.value) return 'Scouting the repository...'
-  return report.value ? 'Report ready.' : ''
+  return report.value && !typing.value ? 'Report ready.' : ''
 })
+
+function stopReveal() {
+  cancelAnimationFrame(rafId)
+  rafId = 0
+}
+
+function finishReveal() {
+  stopReveal()
+  revealed.value = report.value.length
+}
+
+function startReveal() {
+  stopReveal()
+  const total = report.value.length
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    revealed.value = total
+    return
+  }
+  revealed.value = 0
+  // Bounded total time regardless of length: 1.2 s .. 3.5 s.
+  const duration = Math.min(3500, Math.max(1200, total * 4))
+  const start = performance.now()
+  const tick = (now: number) => {
+    const progress = Math.min(1, (now - start) / duration)
+    revealed.value = Math.ceil(total * progress)
+    rafId = progress < 1 ? requestAnimationFrame(tick) : 0
+  }
+  rafId = requestAnimationFrame(tick)
+}
+
+onBeforeUnmount(stopReveal)
 
 const toolBreakdown = computed(() =>
   Object.entries(usage.value?.toolCallsByName ?? {})
@@ -30,12 +65,15 @@ async function submit() {
   loading.value = true
   error.value = ''
   fieldErrors.value = {}
+  stopReveal()
   report.value = ''
+  revealed.value = 0
   usage.value = null
   try {
     const result = await analyze(repoUrl.value.trim(), question.value.trim())
     report.value = result.report
     usage.value = result.usage
+    startReveal()
   } catch (e) {
     if (e instanceof AnalyzeError) {
       error.value = e.message
@@ -152,11 +190,12 @@ async function submit() {
           <path d="M19 30 L25 30.1"/>
         </svg>
         Result
+        <button v-if="typing" type="button" class="skip" @click="finishReveal">Show all</button>
       </h2>
-      <div class="report" v-html="renderedReport"></div>
+      <div class="report" :class="{ 'is-typing': typing }" @click="typing && finishReveal()" v-html="renderedReport"></div>
     </section>
 
-    <section v-if="usage" class="field usage" aria-labelledby="usage-label">
+    <section v-if="usage && !typing" class="field usage" aria-labelledby="usage-label">
       <h2 id="usage-label" class="label">
         <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path class="f-a" d="M6 10 C6 7 8 5 11 5 L37 6 C40 6 42 8 42 11 L41 37 C41 40 39 42 36 42 L10 41 C7 41 5 39 5 36 Z"/>
