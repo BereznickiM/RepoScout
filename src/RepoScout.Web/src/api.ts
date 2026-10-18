@@ -53,5 +53,13 @@ export async function analyze(repoUrl: string, question: string): Promise<Analyz
     throw new AnalyzeError(problem?.title ?? 'Invalid request', fieldErrors)
   }
 
+  if (res.status === 429) {
+    const problem = (await res.json().catch(() => null)) as {
+      title?: string
+      detail?: string
+    } | null
+    throw new AnalyzeError(problem?.detail ?? problem?.title ?? 'Limit reached - please try again later.')
+  }
+
   throw new AnalyzeError(`Something went wrong (HTTP ${res.status})`)
 }
