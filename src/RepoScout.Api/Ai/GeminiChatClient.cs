@@ -64,38 +64,50 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
     private async Task<(string Model, HttpResponseMessage Response)> SendAsync(
         List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
     {
-        var explicitModel = chatOptions?.ModelId;
-        while (true)
+        if (chatOptions?.ModelId is { } explicitModel)
         {
-            if (explicitModel is null && currentModel >= models.Count)
-            {
-                throw new AiRateLimitException(models);
-            }
+            var explicitResponse = await TryPostAsync(explicitModel, history, chatOptions, cancellationToken);
+            return explicitResponse is null
+                ? throw new AiRateLimitException([explicitModel])
+                : (explicitModel, explicitResponse);
+        }
 
-            var model = explicitModel ?? models[currentModel];
-            var request = BuildRequest(model, history, chatOptions);
-            var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
-
-            if (response.IsSuccessStatusCode)
+        while (currentModel < models.Count)
+        {
+            var model = models[currentModel];
+            var response = await TryPostAsync(model, history, chatOptions, cancellationToken);
+            if (response is not null)
             {
                 return (model, response);
             }
 
-            var status = response.StatusCode;
-            response.Dispose();
-            if (status != HttpStatusCode.TooManyRequests)
-            {
-                throw new GeminiApiException(status, $"Gemini returned {(int)status}");
-            }
-
-            logger.LogWarning("Model {Model} is rate-limited (429).", model);
-            if (explicitModel is not null)
-            {
-                throw new AiRateLimitException([model]);
-            }
-
             currentModel++;
         }
+
+        throw new AiRateLimitException(models);
+    }
+
+    // Posts to one model. Returns null when it is rate-limited (429); throws on any other failure.
+    private async Task<HttpResponseMessage?> TryPostAsync(
+        string model, List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
+    {
+        var request = BuildRequest(model, history, chatOptions);
+        var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            return response;
+        }
+
+        var status = response.StatusCode;
+        response.Dispose();
+        if (status != HttpStatusCode.TooManyRequests)
+        {
+            throw new GeminiApiException(status, $"Gemini returned {(int)status}");
+        }
+
+        logger.LogWarning("Model {Model} is rate-limited (429).", model);
+        return null;
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
