@@ -17,6 +17,7 @@ public static class AiServiceCollectionExtensions
         return services.AddHttpClient<GeminiChatClient>((sp, c) =>
         {
             c.BaseAddress = new Uri("https://generativelanguage.googleapis.com/");
+            c.Timeout = TimeSpan.FromSeconds(180);
             c.DefaultRequestHeaders.Add("Api-Revision", "2026-05-20");
             c.DefaultRequestHeaders.Add("x-goog-api-key", sp.GetRequiredService<IOptions<AiModelOptions>>().Value.ApiKey);
         });
