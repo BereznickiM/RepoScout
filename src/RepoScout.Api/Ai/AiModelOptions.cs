@@ -11,4 +11,6 @@ public sealed class AiModelOptions
 
     [Required]
     public string ApiKey { get; init; } = "";
+
+    public string[] FallbackModels { get; init; } = [];
 }

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -6,8 +7,14 @@ using Microsoft.Extensions.Options;
 
 namespace RepoScout.Api.Ai;
 
-public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> options) : IChatClient
+public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> options, ILogger<GeminiChatClient> logger) : IChatClient
 {
+    // Primary model first, then fallbacks. The index is sticky: once a model is rate-limited it is not retried.
+    private readonly List<string> models = new[] { options.Value.Model }.Concat(options.Value.FallbackModels)
+        .Select(m => m?.Trim() ?? "").Where(m => m.Length > 0).Distinct().ToList();
+
+    private int currentModel;
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -17,14 +24,9 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? chatOptions = null, CancellationToken cancellationToken = default)
     {
-        var model = chatOptions?.ModelId ?? options.Value.Model;
-        var request = BuildRequest(model, messages, chatOptions);
-
-        using var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
-        if (!response.IsSuccessStatusCode)
-        {
-            throw new GeminiApiException(response.StatusCode, $"Gemini returned {(int)response.StatusCode}");
-        }
+        var history = messages.ToList();
+        var (model, response) = await SendAsync(history, chatOptions, cancellationToken);
+        using var _ = response;
 
         var dto = await response.Content.ReadFromJsonAsync<InteractionResponse>(JsonOptions, cancellationToken)
             ?? throw new GeminiApiException(response.StatusCode, "Gemini returned an empty response");
@@ -55,6 +57,45 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
                 : null,
             FinishReason = contents.Any(c => c is FunctionCallContent) ? ChatFinishReason.ToolCalls : ChatFinishReason.Stop
         };
+    }
+
+    // Sends the request to the current model; on 429 moves on to the next configured model with the same history.
+    // An explicit ChatOptions.ModelId bypasses the fallback list.
+    private async Task<(string Model, HttpResponseMessage Response)> SendAsync(
+        List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
+    {
+        var explicitModel = chatOptions?.ModelId;
+        while (true)
+        {
+            if (explicitModel is null && currentModel >= models.Count)
+            {
+                throw new AiRateLimitException(models);
+            }
+
+            var model = explicitModel ?? models[currentModel];
+            var request = BuildRequest(model, history, chatOptions);
+            var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
+
+            if (response.IsSuccessStatusCode)
+            {
+                return (model, response);
+            }
+
+            var status = response.StatusCode;
+            response.Dispose();
+            if (status != HttpStatusCode.TooManyRequests)
+            {
+                throw new GeminiApiException(status, $"Gemini returned {(int)status}");
+            }
+
+            logger.LogWarning("Model {Model} is rate-limited (429).", model);
+            if (explicitModel is not null)
+            {
+                throw new AiRateLimitException([model]);
+            }
+
+            currentModel++;
+        }
     }
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
