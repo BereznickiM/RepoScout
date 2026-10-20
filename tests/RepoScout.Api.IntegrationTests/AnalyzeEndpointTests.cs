@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
 
@@ -16,9 +17,11 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     private const string ValidUrl = "https://github.com/o/r";
     private const string CannedReport = "# Canned report\n\nUses `src/app`.";
     private readonly HttpClient _client;
+    private readonly WebApplicationFactory<Program> _factory;
 
     public AnalyzeEndpointTests(WebApplicationFactory<Program> factory)
     {
+        _factory = factory;
         _client = factory
             .WithWebHostBuilder(b =>
             {
@@ -66,6 +69,50 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
 
         public Task<RepoFile> GetFileAsync(RepoRef repo, string path, string gitRef, int maxBytes, CancellationToken ct) =>
             throw new NotSupportedException();
+    }
+
+    private sealed class RateLimitedChatClient : IChatClient
+    {
+        public Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new AiRateLimitException(["secret-model-a", "secret-model-b"]);
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
+    }
+
+    [Fact]
+    public async Task PostAnalyze_AllModelsRateLimited_ReturnsTooManyRequestsLimitReachedWithoutModelNames()
+    {
+        using var client = _factory
+            .WithWebHostBuilder(b =>
+            {
+                b.UseSetting("AiModel:ApiKey", "test-key");
+                b.ConfigureTestServices(s =>
+                {
+                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
+                    s.AddSingleton<IChatClient>(new RateLimitedChatClient());
+                });
+            })
+            .CreateClient();
+
+        var response = await client.PostAsJsonAsync("/api/analyze", new { repoUrl = ValidUrl, question = "q" });
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal(429, body.GetProperty("status").GetInt32());
+        Assert.Equal("Limit reached", body.GetProperty("title").GetString());
+        Assert.Equal("The AI service is currently rate-limited. Please try again later.", body.GetProperty("detail").GetString());
+        Assert.DoesNotContain("secret-model", raw);
+        Assert.DoesNotContain("test-key", raw);
     }
 
     private Task<HttpResponseMessage> Post(object body) => _client.PostAsJsonAsync("/api/analyze", body);

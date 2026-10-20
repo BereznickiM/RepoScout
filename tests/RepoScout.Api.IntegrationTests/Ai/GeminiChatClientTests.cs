@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RepoScout.Api.Ai;
 using RepoScout.Api.IntegrationTests.GitHub;
@@ -22,7 +23,13 @@ public class GeminiChatClientTests
         public List<JsonElement> Bodies { get; } = [];
     }
 
-    private static Harness Create(params Func<HttpResponseMessage>[] responses)
+    private static Harness Create(params Func<HttpResponseMessage>[] responses) =>
+        CreateWith(new AiModelOptions { Model = "default-model", ApiKey = ApiKey }, responses);
+
+    private static Harness CreateWithFallbacks(string[] fallbacks, params Func<HttpResponseMessage>[] responses) =>
+        CreateWith(new AiModelOptions { Model = "A", ApiKey = ApiKey, FallbackModels = fallbacks }, responses);
+
+    private static Harness CreateWith(AiModelOptions modelOptions, params Func<HttpResponseMessage>[] responses)
     {
         var queue = new Queue<Func<HttpResponseMessage>>(responses);
         Harness? h = null;
@@ -33,8 +40,8 @@ public class GeminiChatClientTests
             return queue.Dequeue()();
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://generativelanguage.googleapis.com/") };
-        var options = Options.Create(new AiModelOptions { Model = "default-model", ApiKey = ApiKey });
-        h = new Harness { Client = new GeminiChatClient(http, options), Handler = handler };
+        var options = Options.Create(modelOptions);
+        h = new Harness { Client = new GeminiChatClient(http, options, NullLogger<GeminiChatClient>.Instance), Handler = handler };
         return h;
     }
 
@@ -284,8 +291,8 @@ public class GeminiChatClientTests
     [Theory]
     [InlineData(HttpStatusCode.BadRequest)]
     [InlineData(HttpStatusCode.Unauthorized)]
-    [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.NotFound)]
     public async Task GetResponseAsync_NonSuccessStatus_ThrowsGeminiApiExceptionWithoutBodyOrKey(HttpStatusCode status)
     {
         var h = Create(() => Respond($$"""{"error":"BODY-LEAK-123 {{ApiKey}}"}""", status));
@@ -296,6 +303,150 @@ public class GeminiChatClientTests
         Assert.Contains(((int)status).ToString(), ex.Message);
         Assert.DoesNotContain("BODY-LEAK-123", ex.Message);
         Assert.DoesNotContain(ApiKey, ex.Message);
+        Assert.Single(h.Handler.Requests);
+    }
+
+    // ---- model fallback on 429 ----
+
+    private static HttpResponseMessage Limited() => Respond("""{"error":"BODY-LEAK-123"}""", HttpStatusCode.TooManyRequests);
+
+    private static string[] SentModels(Harness h) => h.Bodies.Select(b => b.GetProperty("model").GetString()!).ToArray();
+
+    [Fact]
+    public async Task GetResponseAsync_PrimaryRateLimited_FallsBackToNextModelWithSameInput()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse));
+
+        var response = await h.Client.GetResponseAsync([User("same question")]);
+
+        Assert.Equal("hello", response.Text);
+        Assert.Equal(["A", "B"], SentModels(h));
+        Assert.True(JsonElement.DeepEquals(h.Bodies[0].GetProperty("input"), h.Bodies[1].GetProperty("input")));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_AfterFallback_NextCallStartsOnFallbackModel()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse), () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()]);
+        await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal(["A", "B", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ChainOfRateLimits_WalksThroughModelsInOrder()
+    {
+        var h = CreateWithFallbacks(["B", "C"], Limited, Limited, () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal(["A", "B", "C"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_AllModelsRateLimited_ThrowsAiRateLimitExceptionListingModelsWithoutLeaks()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, Limited);
+
+        var ex = await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(["A", "B"], ex.ModelsTried);
+        Assert.Equal(["A", "B"], SentModels(h));
+        Assert.DoesNotContain("BODY-LEAK-123", ex.Message);
+        Assert.DoesNotContain(ApiKey, ex.Message);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_AfterAllModelsExhausted_ThrowsImmediatelyWithoutHttpRequest()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, Limited);
+        await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(2, h.Handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_NoFallbackModels_SingleRateLimitThrowsAiRateLimitException()
+    {
+        var h = CreateWithFallbacks([], Limited);
+
+        var ex = await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(["A"], ex.ModelsTried);
+        Assert.Single(h.Handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_PrimaryRateLimitedThenFallbackServerError_ThrowsGeminiApiExceptionWithoutFurtherFallback()
+    {
+        var h = CreateWithFallbacks(["B", "C"], Limited,
+            () => Respond("{}", HttpStatusCode.InternalServerError));
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.Equal(["A", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ExplicitModelId_IgnoresFallbackListAndStickyIndex()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse), () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()]); // A limited -> B (sticky index now at B)
+        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" });
+
+        Assert.Equal(["A", "B", "X"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ExplicitModelIdRateLimited_ThrowsWithThatModelOnlyAndNoFallback()
+    {
+        var h = CreateWithFallbacks(["B"], Limited);
+
+        var ex = await Assert.ThrowsAsync<AiRateLimitException>(
+            () => h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" }));
+
+        Assert.Equal(["X"], ex.ModelsTried);
+        Assert.Equal(["X"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ExplicitModelIdRateLimited_DoesNotAdvanceStickyIndex()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse));
+        await Assert.ThrowsAsync<AiRateLimitException>(
+            () => h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" }));
+
+        await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal(["X", "A"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_BlankAndDuplicateModels_AreNormalised()
+    {
+        var h = CreateWithFallbacks([" B ", "", "   ", "A", "B", " A "], Limited, Limited);
+
+        var ex = await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(["A", "B"], ex.ModelsTried);
+        Assert.Equal(["A", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_FallbackSucceeds_ResponseModelIdFallsBackToUsedModelWhenNotReported()
+    {
+        var h = CreateWithFallbacks(["B"], Limited,
+            () => Respond("""{"id":"i","steps":[{"type":"model_output","content":[{"type":"text","text":"t"}]}]}"""));
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal("B", response.ModelId);
     }
 
     // ---- round trips ----
