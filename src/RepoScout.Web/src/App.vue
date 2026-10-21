@@ -282,8 +282,9 @@ async function submit() {
         </button>
       </div>
       <div v-if="loading" class="scout-progress">
-        <p>{{ scoutMessage }} · {{ elapsed }}s</p>
-        <p v-if="isSlow">Scouting is taking longer than usual...</p>
+        <p class="scout-message">{{ scoutMessage }}</p>
+        <p v-if="isSlow" class="scout-slow">Scouting is taking longer than usual...</p>
+        <p class="scout-elapsed">Elapsed: {{ elapsed }}s</p>
       </div>
     </form>
 

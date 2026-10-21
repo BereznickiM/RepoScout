@@ -170,8 +170,10 @@ input:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 var(--line
 .run:hover .arrow { transform: translateX(5px); }
 
 /* ---------- Scout progress ---------- */
-.scout-progress { margin-top: 14px; color: var(--ink-soft); font-size: 16px; overflow-wrap: anywhere; }
-.scout-progress p { margin: 0 0 4px; }
+.scout-progress { margin-top: 14px; color: var(--ink-soft); font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
+.scout-progress p { margin: 0 0 6px; }
+.scout-slow { color: var(--ink); }
+.scout-elapsed { font-family: "Gochi Hand", cursive; font-size: 18px; font-variant-numeric: tabular-nums; }
 
 /* ---------- Alert ---------- */
 .alert {
