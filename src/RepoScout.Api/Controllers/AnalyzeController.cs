@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
 
 namespace RepoScout.Api.Controllers;
@@ -16,7 +17,17 @@ public class AnalyzeController(IRepoAnalyzer analyzer) : ControllerBase
             return ValidationProblem();
         }
 
-        var result = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), HttpContext.RequestAborted);
-        return Ok(new AnalyzeResponse(result.Report, result.Usage));
+        try
+        {
+            var result = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), HttpContext.RequestAborted);
+            return Ok(new AnalyzeResponse(result.Report, result.Usage));
+        }
+        catch (AiRateLimitException)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status429TooManyRequests,
+                title: "Limit reached",
+                detail: "The AI service is currently rate-limited. Please try again later.");
+        }
     }
 }
