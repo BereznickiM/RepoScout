@@ -29,7 +29,10 @@ public class GeminiChatClientTests
     private static Harness CreateWithFallbacks(string[] fallbacks, params Func<HttpResponseMessage>[] responses) =>
         CreateWith(new AiModelOptions { Model = "A", ApiKey = ApiKey, FallbackModels = fallbacks }, responses);
 
-    private static Harness CreateWith(AiModelOptions modelOptions, params Func<HttpResponseMessage>[] responses)
+    private static Harness CreateWith(AiModelOptions modelOptions, params Func<HttpResponseMessage>[] responses) =>
+        CreateWith(modelOptions, TimeSpan.Zero, responses);
+
+    private static Harness CreateWith(AiModelOptions modelOptions, TimeSpan retryBaseDelay, params Func<HttpResponseMessage>[] responses)
     {
         var queue = new Queue<Func<HttpResponseMessage>>(responses);
         Harness? h = null;
@@ -41,7 +44,7 @@ public class GeminiChatClientTests
         });
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://generativelanguage.googleapis.com/") };
         var options = Options.Create(modelOptions);
-        h = new Harness { Client = new GeminiChatClient(http, options, NullLogger<GeminiChatClient>.Instance), Handler = handler };
+        h = new Harness { Client = new GeminiChatClient(http, options, NullLogger<GeminiChatClient>.Instance) { RetryBaseDelay = retryBaseDelay }, Handler = handler };
         return h;
     }
 
@@ -75,7 +78,7 @@ public class GeminiChatClientTests
         Assert.Equal("sys1\n\nsys2", body.GetProperty("system_instruction").GetString());
         AssertJsonEqual("""[{"type":"user_input","content":"hi"}]""", body.GetProperty("input"));
         Assert.False(body.TryGetProperty("tools", out _));
-        Assert.False(body.TryGetProperty("generation_config", out _));
+        AssertJsonEqual("""{"thinking_level":"low"}""", body.GetProperty("generation_config"));
     }
 
     [Fact]
@@ -151,7 +154,9 @@ public class GeminiChatClientTests
 
         await h.Client.GetResponseAsync([User()], new ChatOptions { ToolMode = mode });
 
-        Assert.Equal(expected, h.Bodies.Single().GetProperty("generation_config").GetProperty("tool_choice").GetString());
+        var config = h.Bodies.Single().GetProperty("generation_config");
+        Assert.Equal(expected, config.GetProperty("tool_choice").GetString());
+        Assert.Equal("low", config.GetProperty("thinking_level").GetString());
     }
 
     [Fact]
@@ -163,6 +168,27 @@ public class GeminiChatClientTests
         await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([User()], options));
 
         Assert.Empty(h.Handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ExplicitModelId_SendsLowThinkingLevel()
+    {
+        var h = CreateOk();
+
+        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "other-model" });
+
+        AssertJsonEqual("""{"thinking_level":"low"}""", h.Bodies.Single().GetProperty("generation_config"));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_FallbackModel_SendsLowThinkingLevelOnEveryRequest()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()], new ChatOptions { ToolMode = ChatToolMode.Auto });
+
+        Assert.Equal(["A", "B"], SentModels(h));
+        Assert.All(h.Bodies, b => Assert.Equal("low", b.GetProperty("generation_config").GetProperty("thinking_level").GetString()));
     }
 
     // ---- unsupported input ----
@@ -447,6 +473,95 @@ public class GeminiChatClientTests
         var response = await h.Client.GetResponseAsync([User()]);
 
         Assert.Equal("B", response.ModelId);
+    }
+
+    // ---- 503 retry ----
+
+    private static HttpResponseMessage Overloaded() => Respond("""{"error":"BODY-LEAK-123"}""", HttpStatusCode.ServiceUnavailable);
+
+    [Fact]
+    public async Task GetResponseAsync_503ThenSuccess_RetriesSameModelAndReturnsResponse()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, () => Respond(TextResponse));
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal("hello", response.Text);
+        Assert.Equal(["A", "A"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_Two503ThenSuccess_SucceedsOnThirdAttempt()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, () => Respond(TextResponse));
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal("hello", response.Text);
+        Assert.Equal(["A", "A", "A"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_Persistent503_ThrowsGeminiApiExceptionAfterThreeRequestsWithoutFallback()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, Overloaded);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+        Assert.Equal(["A", "A", "A"], SentModels(h));
+        Assert.DoesNotContain("BODY-LEAK-123", ex.Message);
+        Assert.DoesNotContain(ApiKey, ex.Message);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_503ThenRateLimit_FallsBackToNextModel()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Limited, () => Respond(TextResponse));
+
+        var response = await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal("hello", response.Text);
+        Assert.Equal(["A", "A", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_ServerError500_IsNotRetried()
+    {
+        var h = Create(() => Respond("{}", HttpStatusCode.InternalServerError));
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
+        Assert.Single(h.Handler.Requests);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_503WithExplicitModelId_RetriesSameExplicitModel()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" });
+
+        Assert.Equal(["X", "X"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_CancelledDuringBackoff_ThrowsOperationCanceledWithoutSecondRequest()
+    {
+        using var cts = new CancellationTokenSource();
+        var h = CreateWith(
+            new AiModelOptions { Model = "A", ApiKey = ApiKey },
+            TimeSpan.FromHours(1),
+            () =>
+            {
+                cts.Cancel();
+                return Overloaded();
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => h.Client.GetResponseAsync([User()], null, cts.Token));
+
+        Assert.Single(h.Handler.Requests);
     }
 
     // ---- round trips ----
