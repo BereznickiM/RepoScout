@@ -170,10 +170,66 @@ input:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 var(--line
 .run:hover .arrow { transform: translateX(5px); }
 
 /* ---------- Scout progress ---------- */
-.scout-progress { margin-top: 14px; color: var(--ink-soft); font-size: 20px; line-height: 1.35; overflow-wrap: anywhere; }
-.scout-progress p { margin: 0 0 6px; }
-.scout-slow { color: var(--ink); }
-.scout-elapsed { font-family: "Gochi Hand", cursive; font-size: 18px; font-variant-numeric: tabular-nums; }
+.scout-progress {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  max-width: 380px;
+  margin: -12px auto 32px;
+  padding: 14px 18px 14px 14px;
+  color: var(--ink);
+  background: var(--card);
+  border: 2.5px solid var(--line);
+  border-radius: var(--wobble-b);
+  box-shadow: 4px 5px 0 var(--line);
+  transform: rotate(.6deg);
+  overflow-wrap: anywhere;
+  animation: scout-in .25s ease-out;
+}
+@keyframes scout-in {
+  from { opacity: 0; transform: rotate(.6deg) translateY(-6px); }
+  to   { opacity: 1; transform: rotate(.6deg) translateY(0); }
+}
+.scout-icon { width: 46px; height: 46px; flex-shrink: 0; animation: scout-bob 1.1s ease-in-out infinite alternate; }
+@keyframes scout-bob {
+  from { transform: translateY(2px) rotate(-8deg); }
+  to   { transform: translateY(-3px) rotate(8deg); }
+}
+.scout-body { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; flex: 1; }
+.scout-message-box { min-height: 1.2em; font-family: "Gochi Hand", cursive; font-size: 22px; line-height: 1.2; }
+.scout-message { margin: 0; }
+.scout-swap-enter-active, .scout-swap-leave-active { transition: opacity .2s ease, transform .2s ease; }
+.scout-swap-enter-from { opacity: 0; transform: translateY(6px); }
+.scout-swap-leave-to   { opacity: 0; transform: translateY(-6px); }
+.scout-fade-enter-active { transition: opacity .3s ease; }
+.scout-fade-enter-from { opacity: 0; }
+.scout-slow {
+  margin: 0;
+  padding: 0 .3em;
+  font-size: 18px;
+  line-height: 1.3;
+  background: linear-gradient(transparent 55%, var(--marker) 55%, var(--marker) 92%, transparent 92%);
+  transform: rotate(-.5deg);
+}
+.scout-elapsed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 3px 12px 2px 8px;
+  font-family: "Gochi Hand", cursive;
+  font-size: 19px;
+  line-height: 1.2;
+  background: var(--accent-a);
+  border: 2px solid var(--line);
+  border-radius: var(--wobble-c);
+  box-shadow: 2px 3px 0 var(--line);
+  transform: rotate(-.8deg);
+}
+.scout-clock { width: 20px; height: 20px; flex-shrink: 0; }
+.scout-time { font-variant-numeric: tabular-nums; }
+.scout-time-label { font-size: 16px; color: var(--ink-soft); }
 
 /* ---------- Alert ---------- */
 .alert {
@@ -453,6 +509,9 @@ input:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 var(--line
   .report h2 { font-size: 21px; }
   .report h3 { font-size: 18px; }
   .run { width: 100%; justify-content: center; }
+  .scout-progress { max-width: none; gap: 10px; padding: 12px 14px 12px 10px; }
+  .scout-icon { width: 40px; height: 40px; }
+  .scout-message-box { min-height: 2.4em; font-size: 20px; display: flex; align-items: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {

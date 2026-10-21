@@ -282,9 +282,32 @@ async function submit() {
         </button>
       </div>
       <div v-if="loading" class="scout-progress">
-        <p class="scout-message">{{ scoutMessage }}</p>
-        <p v-if="isSlow" class="scout-slow">Scouting is taking longer than usual...</p>
-        <p class="scout-elapsed">Elapsed: {{ elapsed }}s</p>
+        <svg class="scout-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle class="f-b" cx="20" cy="20" r="14"/>
+          <circle class="f-card" cx="20" cy="20" r="9"/>
+          <path d="M15 17 C16 15 18 14 20 14.5" stroke-width="2"/>
+          <path d="M30 30 L42 42" stroke-width="5"/>
+        </svg>
+        <div class="scout-body">
+          <div class="scout-message-box">
+            <Transition name="scout-swap" mode="out-in">
+              <p :key="scoutMessage" class="scout-message">{{ scoutMessage }}</p>
+            </Transition>
+          </div>
+          <Transition name="scout-fade">
+            <p v-if="isSlow" class="scout-slow">Scouting is taking longer than usual...</p>
+          </Transition>
+          <p class="scout-elapsed">
+            <svg class="scout-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M9.5 3 L14.5 3"/>
+              <circle class="f-card" cx="12" cy="14" r="7.5"/>
+              <path d="M12 14 L12 9.5"/>
+              <path d="M12 14 L15 15.5"/>
+            </svg>
+            <span class="scout-time">{{ elapsed }}s</span>
+            <span class="scout-time-label">elapsed</span>
+          </p>
+        </div>
       </div>
     </form>
 
