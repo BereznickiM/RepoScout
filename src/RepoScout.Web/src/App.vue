@@ -168,6 +168,10 @@ const tokenSplit = computed(() => {
 
 const formatTokens = (n: number | null) => (n === null ? 'n/a' : n.toLocaleString())
 
+function onProgressLeave() {
+  if (report.value && !loading.value) startReveal()
+}
+
 async function submit() {
   loading.value = true
   startTimer()
@@ -181,7 +185,7 @@ async function submit() {
     const result = await analyze(repoUrl.value.trim(), question.value.trim())
     report.value = result.report
     usage.value = result.usage
-    startReveal()
+    // The reveal starts once the progress block has faded out (onProgressLeave).
   } catch (e) {
     if (e instanceof AnalyzeError) {
       error.value = e.message
@@ -281,10 +285,6 @@ async function submit() {
           </svg>
         </button>
       </div>
-      <div v-if="loading" class="scout-progress">
-        <p>{{ scoutMessage }} · {{ elapsed }}s</p>
-        <p v-if="isSlow">Scouting is taking longer than usual...</p>
-      </div>
     </form>
 
     <p v-if="error" class="alert" role="alert">{{ error }}</p>
@@ -292,7 +292,7 @@ async function submit() {
 
   </main>
 
-  <div v-if="report" ref="resultsEl" class="results">
+  <div v-if="loading || report" ref="resultsEl" class="results">
     <section class="field output" aria-labelledby="report-label">
       <h2 id="report-label" class="label">
         <svg class="icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -303,9 +303,15 @@ async function submit() {
           <path d="M19 30 L25 30.1"/>
         </svg>
         <span class="title">Scouting Report</span>
-        <button v-if="typing" type="button" class="skip" @click="endReveal">Show all</button>
+        <button v-if="typing && !loading" type="button" class="skip" @click="endReveal">Show all</button>
       </h2>
-      <div ref="reportEl" class="report" :class="{ 'is-typing': typing }" @click="typing && endReveal()" v-html="renderedReport"></div>
+      <Transition name="swap" mode="out-in" @after-leave="onProgressLeave">
+        <div v-if="loading" key="progress" class="scout-progress">
+          <p>{{ scoutMessage }} · {{ elapsed }}s</p>
+          <p v-if="isSlow">Scouting is taking longer than usual...</p>
+        </div>
+        <div v-else-if="report" key="report" ref="reportEl" class="report" :class="{ 'is-typing': typing }" @click="typing && endReveal()" v-html="renderedReport"></div>
+      </Transition>
     </section>
 
     <section v-if="usage && !typing" ref="usageEl" class="field usage" aria-labelledby="usage-label">

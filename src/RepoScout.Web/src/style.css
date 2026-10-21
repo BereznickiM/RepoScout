@@ -170,8 +170,10 @@ input:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 var(--line
 .run:hover .arrow { transform: translateX(5px); }
 
 /* ---------- Scout progress ---------- */
-.scout-progress { margin-top: 14px; color: var(--ink-soft); font-size: 16px; overflow-wrap: anywhere; }
-.scout-progress p { margin: 0 0 4px; }
+.scout-progress { min-height: 120px; color: var(--ink-soft); font-size: 17px; overflow-wrap: anywhere; }
+.scout-progress p { margin: 0 0 6px; }
+.swap-enter-active, .swap-leave-active { transition: opacity .25s ease; }
+.swap-enter-from, .swap-leave-to { opacity: 0; }
 
 /* ---------- Alert ---------- */
 .alert {
