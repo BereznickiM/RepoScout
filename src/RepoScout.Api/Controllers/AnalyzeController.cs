@@ -1,3 +1,4 @@
+using System.Net;
 using Microsoft.AspNetCore.Mvc;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
@@ -27,7 +28,14 @@ public class AnalyzeController(IRepoAnalyzer analyzer) : ControllerBase
             return Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
                 title: "Limit reached",
-                detail: "The AI service is currently rate-limited. Please try again later.");
+                detail: "Usage limits reached, please try again later.");
+        }
+        catch (GeminiApiException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status503ServiceUnavailable,
+                title: "LLM provider overloaded",
+                detail: "LLM provider is overloaded, please try again in few minutes.");
         }
     }
 }
