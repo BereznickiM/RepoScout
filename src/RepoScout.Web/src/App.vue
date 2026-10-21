@@ -20,8 +20,35 @@ let rafId = 0
 
 const renderedReport = computed(() => renderMarkdown(report.value.slice(0, revealed.value)))
 
+const SCOUT_MESSAGES = ['Reading file tree…', 'Inspecting files…', 'Following references…', 'Writing report…']
+const SLOW_AFTER_SECONDS = 45
+const elapsed = ref(0)
+let startedAt = 0
+let timerId = 0
+
+const scoutMessage = computed(() => SCOUT_MESSAGES[Math.floor(elapsed.value / 6) % SCOUT_MESSAGES.length])
+const isSlow = computed(() => elapsed.value >= SLOW_AFTER_SECONDS)
+
+function startTimer() {
+  stopTimer()
+  startedAt = Date.now()
+  elapsed.value = 0
+  timerId = window.setInterval(() => {
+    elapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+}
+
+function stopTimer() {
+  clearInterval(timerId)
+  timerId = 0
+}
+
 const statusText = computed(() => {
-  if (loading.value) return 'Scouting the repository...'
+  if (loading.value) {
+    return isSlow.value
+      ? 'Scouting the repository... Scouting is taking longer than usual...'
+      : 'Scouting the repository...'
+  }
   return report.value && !typing.value ? 'Report ready.' : ''
 })
 
@@ -119,7 +146,10 @@ function startReveal() {
   rafId = requestAnimationFrame(tick)
 }
 
-onBeforeUnmount(stopReveal)
+onBeforeUnmount(() => {
+  stopReveal()
+  stopTimer()
+})
 
 const toolRows = computed(() => {
   const entries = Object.entries(usage.value?.toolCallsByName ?? {}).sort((a, b) => b[1] - a[1])
@@ -140,6 +170,7 @@ const formatTokens = (n: number | null) => (n === null ? 'n/a' : n.toLocaleStrin
 
 async function submit() {
   loading.value = true
+  startTimer()
   error.value = ''
   fieldErrors.value = {}
   stopReveal()
@@ -159,6 +190,7 @@ async function submit() {
       error.value = 'Something went wrong'
     }
   } finally {
+    stopTimer()
     loading.value = false
   }
 }
@@ -248,6 +280,10 @@ async function submit() {
             <path d="M3 10.5 C12 9 22 11 35 10"/><path d="M28 3.5 L36 10 L28.5 16.5"/>
           </svg>
         </button>
+      </div>
+      <div v-if="loading" class="scout-progress">
+        <p>{{ scoutMessage }} · {{ elapsed }}s</p>
+        <p v-if="isSlow">Scouting is taking longer than usual...</p>
       </div>
     </form>
 

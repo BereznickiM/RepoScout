@@ -15,6 +15,11 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
 
     private int currentModel;
 
+    private const string ThinkingLevel = "low";
+    private const int MaxAttempts = 3; // 1 + 2 retries on 503
+
+    public TimeSpan RetryBaseDelay { get; init; } = TimeSpan.FromSeconds(1);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -87,28 +92,48 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         throw new AiRateLimitException(models);
     }
 
-    // Posts to one model. Returns null when it is rate-limited (429); throws on any other failure.
+    // Posts to one model. Returns null when it is rate-limited (429); retries 503 (overloaded) on the same model
+    // with backoff; throws on any other failure, including a 503 that persists after the last attempt.
+    // Hand-rolled on purpose: a generic resilience handler would also retry 429 and defeat the model fallback.
     private async Task<HttpResponseMessage?> TryPostAsync(
         string model, List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
     {
         var request = BuildRequest(model, history, chatOptions);
-        var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
 
-        if (response.IsSuccessStatusCode)
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            return response;
-        }
+            var response = await http.PostAsJsonAsync("v1beta/interactions", request, JsonOptions, cancellationToken);
 
-        var status = response.StatusCode;
-        response.Dispose();
-        if (status != HttpStatusCode.TooManyRequests)
-        {
+            if (response.IsSuccessStatusCode)
+            {
+                return response;
+            }
+
+            var status = response.StatusCode;
+            response.Dispose();
+
+            if (status == HttpStatusCode.TooManyRequests)
+            {
+                logger.LogWarning("Model {Model} is rate-limited (429).", model);
+                return null;
+            }
+
+            if (status == HttpStatusCode.ServiceUnavailable && attempt < MaxAttempts)
+            {
+                logger.LogWarning("Model {Model} unavailable (503), retry {Attempt}/{Max}", model, attempt, MaxAttempts - 1);
+                await Task.Delay(RetryDelay(attempt), cancellationToken);
+                continue;
+            }
+
             throw new GeminiApiException(status, $"Gemini returned {(int)status}");
         }
 
-        logger.LogWarning("Model {Model} is rate-limited (429).", model);
-        return null;
+        throw new InvalidOperationException("Unreachable: the last attempt always returns or throws.");
     }
+
+    // RetryBaseDelay * (5 + 2^(attempt-1)) plus jitter in [0, RetryBaseDelay/2].
+    private TimeSpan RetryDelay(int failedAttempt)
+        => RetryBaseDelay * (5 + (1 << (failedAttempt - 1))) + RetryBaseDelay * (Random.Shared.NextDouble() * 0.5);
 
     public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages, ChatOptions? chatOptions = null, CancellationToken cancellationToken = default)
@@ -228,12 +253,12 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
                 : throw new NotSupportedException($"Unsupported tool type {tool.GetType().Name}.")).ToList()
             : null;
 
-    private static GenerationConfig? ToGenerationConfig(ChatToolMode? toolMode) => toolMode switch
+    private static GenerationConfig ToGenerationConfig(ChatToolMode? toolMode) => toolMode switch
     {
-        null => null,
-        AutoChatToolMode => new GenerationConfig("auto"),
-        NoneChatToolMode => new GenerationConfig("none"),
-        RequiredChatToolMode { RequiredFunctionName: null } => new GenerationConfig("any"),
+        null => new GenerationConfig(null, ThinkingLevel),
+        AutoChatToolMode => new GenerationConfig("auto", ThinkingLevel),
+        NoneChatToolMode => new GenerationConfig("none", ThinkingLevel),
+        RequiredChatToolMode { RequiredFunctionName: null } => new GenerationConfig("any", ThinkingLevel),
         _ => throw new NotSupportedException("Requiring a specific tool is not supported.")
     };
 
@@ -284,7 +309,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         bool Store,
         string? SystemInstruction,
         List<ToolDeclaration>? Tools,
-        GenerationConfig? GenerationConfig);
+        GenerationConfig GenerationConfig);
 
     // Each step/part record carries its fixed Gemini "type" discriminator.
     private sealed record UserInputStep(string Content)
@@ -317,7 +342,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         public string Type => "function";
     }
 
-    private sealed record GenerationConfig(string ToolChoice);
+    private sealed record GenerationConfig(string? ToolChoice, string ThinkingLevel);
 
     private sealed record InteractionResponse(string? Id, string? Model, List<JsonElement>? Steps, InteractionUsage? Usage);
 

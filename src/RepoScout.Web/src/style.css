@@ -169,6 +169,10 @@ input:hover { transform: translate(-1px, -1px); box-shadow: 5px 6px 0 var(--line
 .run .arrow { width: 34px; height: 20px; flex-shrink: 0; transition: transform .15s ease; }
 .run:hover .arrow { transform: translateX(5px); }
 
+/* ---------- Scout progress ---------- */
+.scout-progress { margin-top: 14px; color: var(--ink-soft); font-size: 16px; overflow-wrap: anywhere; }
+.scout-progress p { margin: 0 0 4px; }
+
 /* ---------- Alert ---------- */
 .alert {
   margin: 0 0 30px;
