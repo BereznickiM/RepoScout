@@ -21,7 +21,7 @@ Users question is processed by AI agent and then this AI agent using available t
 - Public hosting with shared free-tier limits: per-IP rate limit, global daily analysis cap, clear "limit reached" message.
 - Security: repo content is untrusted data (see Prompt injection security below); secrets (LLM key, GitHub token) only on the server via user-secrets/env vars.
 - Report format is free-form Markdown; the prompt requires citing file paths as evidence.
-- Hosting/deployment: undecided.
+- Hosting/deployment: Vercel (Services: Vite frontend + API as container), see docs/deploy-vercel.md.
 - Layering: HTTP layer -> Agent (loop, prompt, budget) -> Tools -> GitHub client. Only the GitHub client knows about GitHub; only the `IChatClient` seam knows about the LLM provider. The agent loop must be testable with a fake `IChatClient`.
 
 **Prompt injection security:**

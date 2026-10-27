@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "web": { "root": "src/RepoScout.Web/", "framework": "vite" },
+    "api": { "root": "src/RepoScout.Api/", "entrypoint": "Dockerfile", "runtime": "container" }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
+  ]
+}
