@@ -1,0 +1,12 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY RepoScout.Api.csproj ./
+RUN dotnet restore
+COPY . ./
+RUN dotnet publish -c Release --no-restore -o /app/publish /p:UseAppHost=false
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled
+WORKDIR /app
+COPY --from=build /app/publish ./
+ENV ASPNETCORE_HTTP_PORTS=8080 DOTNET_EnableDiagnostics=0
+ENTRYPOINT ["dotnet", "RepoScout.Api.dll"]
