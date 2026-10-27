@@ -71,11 +71,11 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
             throw new NotSupportedException();
     }
 
-    private sealed class RateLimitedChatClient : IChatClient
+    private sealed class ThrowingChatClient(Exception exception) : IChatClient
     {
         public Task<ChatResponse> GetResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
-            throw new AiRateLimitException(["secret-model-a", "secret-model-b"]);
+            throw exception;
 
         public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
             IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
@@ -98,7 +98,7 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
                 b.ConfigureTestServices(s =>
                 {
                     s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
-                    s.AddSingleton<IChatClient>(new RateLimitedChatClient());
+                    s.AddSingleton<IChatClient>(new ThrowingChatClient(new AiRateLimitException(["secret-model-a", "secret-model-b"])));
                 });
             })
             .CreateClient();
@@ -110,9 +110,50 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.Equal(429, body.GetProperty("status").GetInt32());
         Assert.Equal("Limit reached", body.GetProperty("title").GetString());
-        Assert.Equal("The AI service is currently rate-limited. Please try again later.", body.GetProperty("detail").GetString());
+        Assert.Equal("Usage limits reached, please try again later.", body.GetProperty("detail").GetString());
         Assert.DoesNotContain("secret-model", raw);
         Assert.DoesNotContain("test-key", raw);
+    }
+
+    private async Task<HttpResponseMessage> PostWithThrowingClient(Exception exception)
+    {
+        using var client = _factory
+            .WithWebHostBuilder(b =>
+            {
+                b.UseSetting("AiModel:ApiKey", "test-key");
+                b.ConfigureTestServices(s =>
+                {
+                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
+                    s.AddSingleton<IChatClient>(new ThrowingChatClient(exception));
+                });
+            })
+            .CreateClient();
+        return await client.PostAsJsonAsync("/api/analyze", new { repoUrl = ValidUrl, question = "q" });
+    }
+
+    [Fact]
+    public async Task PostAnalyze_ProviderOverloaded_ReturnsServiceUnavailableWithoutLeaks()
+    {
+        var response = await PostWithThrowingClient(
+            new GeminiApiException(HttpStatusCode.ServiceUnavailable, "Gemini returned 503"));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal(503, body.GetProperty("status").GetInt32());
+        Assert.Equal("LLM provider overloaded", body.GetProperty("title").GetString());
+        Assert.Equal("LLM provider is overloaded, please try again in few minutes.", body.GetProperty("detail").GetString());
+        Assert.DoesNotContain("test-key", raw);
+    }
+
+    [Fact]
+    public async Task PostAnalyze_ProviderServerError500_StaysGenericInternalServerError()
+    {
+        var response = await PostWithThrowingClient(
+            new GeminiApiException(HttpStatusCode.InternalServerError, "Gemini returned 500"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.DoesNotContain("overloaded", await response.Content.ReadAsStringAsync());
     }
 
     private Task<HttpResponseMessage> Post(object body) => _client.PostAsJsonAsync("/api/analyze", body);

@@ -20,8 +20,35 @@ let rafId = 0
 
 const renderedReport = computed(() => renderMarkdown(report.value.slice(0, revealed.value)))
 
+const SCOUT_MESSAGES = ['Reading file tree…', 'Inspecting files…', 'Following references…', 'Writing report…']
+const SLOW_AFTER_SECONDS = 45
+const elapsed = ref(0)
+let startedAt = 0
+let timerId = 0
+
+const scoutMessage = computed(() => SCOUT_MESSAGES[Math.floor(elapsed.value / 6) % SCOUT_MESSAGES.length])
+const isSlow = computed(() => elapsed.value >= SLOW_AFTER_SECONDS)
+
+function startTimer() {
+  stopTimer()
+  startedAt = Date.now()
+  elapsed.value = 0
+  timerId = window.setInterval(() => {
+    elapsed.value = Math.floor((Date.now() - startedAt) / 1000)
+  }, 1000)
+}
+
+function stopTimer() {
+  clearInterval(timerId)
+  timerId = 0
+}
+
 const statusText = computed(() => {
-  if (loading.value) return 'Scouting the repository...'
+  if (loading.value) {
+    return isSlow.value
+      ? 'Scouting the repository... Scouting is taking longer than usual...'
+      : 'Scouting the repository...'
+  }
   return report.value && !typing.value ? 'Report ready.' : ''
 })
 
@@ -119,7 +146,10 @@ function startReveal() {
   rafId = requestAnimationFrame(tick)
 }
 
-onBeforeUnmount(stopReveal)
+onBeforeUnmount(() => {
+  stopReveal()
+  stopTimer()
+})
 
 const toolRows = computed(() => {
   const entries = Object.entries(usage.value?.toolCallsByName ?? {}).sort((a, b) => b[1] - a[1])
@@ -140,6 +170,7 @@ const formatTokens = (n: number | null) => (n === null ? 'n/a' : n.toLocaleStrin
 
 async function submit() {
   loading.value = true
+  startTimer()
   error.value = ''
   fieldErrors.value = {}
   stopReveal()
@@ -159,6 +190,7 @@ async function submit() {
       error.value = 'Something went wrong'
     }
   } finally {
+    stopTimer()
     loading.value = false
   }
 }
@@ -232,22 +264,37 @@ async function submit() {
 
       <div class="actions">
         <button
+          v-if="!loading"
           class="run"
-          :class="{ 'is-running': loading }"
           type="submit"
-          :disabled="loading"
-          :aria-busy="loading"
         >
           <svg class="ico" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <circle cx="10" cy="20" r="5.5"/><circle cx="22" cy="20" r="5.5"/>
             <path d="M6 16 L8.5 7 L13 7.5 L14 15"/><path d="M26 16 L23.5 7 L19 7.5 L18 15"/>
             <path d="M15 17 C15.7 16.3 16.3 16.3 17 17"/>
           </svg>
-          <span class="run-label">{{ loading ? 'Scouting...' : 'Run Scout' }}</span>
-          <svg v-if="!loading" class="arrow" viewBox="0 0 40 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <span class="run-label">Run Scout</span>
+          <svg class="arrow" viewBox="0 0 40 20" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M3 10.5 C12 9 22 11 35 10"/><path d="M28 3.5 L36 10 L28.5 16.5"/>
           </svg>
         </button>
+        <div v-else class="scout-progress">
+          <svg class="scout-icon" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle class="f-b" cx="20" cy="20" r="14"/>
+            <circle class="f-card" cx="20" cy="20" r="9"/>
+            <path d="M15 17 C16 15 18 14 20 14.5" stroke-width="2"/>
+            <path d="M30 30 L42 42" stroke-width="5"/>
+          </svg>
+          <div class="scout-message-box">
+            <Transition name="scout-swap" mode="out-in">
+              <p :key="scoutMessage" class="scout-message">{{ scoutMessage }}</p>
+            </Transition>
+          </div>
+          <span class="scout-time">{{ elapsed }}s</span>
+          <Transition name="scout-fade">
+            <p v-if="isSlow" class="scout-slow">Scouting is taking longer than usual...</p>
+          </Transition>
+        </div>
       </div>
     </form>
 
