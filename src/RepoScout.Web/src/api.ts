@@ -1,3 +1,7 @@
+const CLIENT_TIMEOUT_MS = 180_000
+
+export const SERVER_UNAVAILABLE_MESSAGE = 'The server is temporarily unavailable, please try again in a few minutes.'
+
 export class AnalyzeError extends Error {
   fieldErrors?: Record<string, string[]>
 
@@ -31,9 +35,10 @@ export async function analyze(repoUrl: string, question: string): Promise<Analyz
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ repoUrl, question }),
+      signal: AbortSignal.timeout(CLIENT_TIMEOUT_MS),
     })
   } catch {
-    throw new AnalyzeError('API unreachable')
+    throw new AnalyzeError(SERVER_UNAVAILABLE_MESSAGE)
   }
 
   if (res.ok) {
@@ -50,16 +55,16 @@ export async function analyze(repoUrl: string, question: string): Promise<Analyz
       // ASP.NET may return keys in PascalCase or camelCase; normalize to camelCase.
       fieldErrors[key.charAt(0).toLowerCase() + key.slice(1)] = messages
     }
-    throw new AnalyzeError(problem?.title ?? 'Invalid request', fieldErrors)
+    const message = problem?.title ?? 'Invalid request'
+    console.error(`API error ${res.status}: ${message}`)
+    throw new AnalyzeError(message, fieldErrors)
   }
 
-  if (res.status === 429 || res.status === 503) {
-    const problem = (await res.json().catch(() => null)) as {
-      title?: string
-      detail?: string
-    } | null
-    throw new AnalyzeError(problem?.detail ?? problem?.title ?? `Something went wrong (HTTP ${res.status})`)
-  }
-
-  throw new AnalyzeError(`Something went wrong (HTTP ${res.status})`)
+  const problem = (await res.json().catch(() => null)) as {
+    title?: string
+    detail?: string
+  } | null
+  const message = problem?.detail ?? problem?.title ?? SERVER_UNAVAILABLE_MESSAGE
+  console.error(`API error ${res.status}: ${message}`)
+  throw new AnalyzeError(message)
 }

@@ -2,13 +2,17 @@ using System.Net;
 using Microsoft.AspNetCore.Mvc;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
+using RepoScout.Api.GitHub;
 
 namespace RepoScout.Api.Controllers;
 
 [ApiController]
 [Route("api/analyze")]
-public class AnalyzeController(IRepoAnalyzer analyzer) : ControllerBase
+public class AnalyzeController(IRepoAnalyzer analyzer, ILogger<AnalyzeController> logger) : ControllerBase
 {
+    /// <summary>Overall analysis deadline. Settable so tests can shorten it.</summary>
+    public static TimeSpan AnalysisDeadline { get; set; } = TimeSpan.FromSeconds(170);
+
     [HttpPost]
     public async Task<IActionResult> Post(AnalyzeRequest request)
     {
@@ -18,24 +22,70 @@ public class AnalyzeController(IRepoAnalyzer analyzer) : ControllerBase
             return ValidationProblem();
         }
 
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted);
+        deadline.CancelAfter(AnalysisDeadline);
+
         try
         {
-            var result = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), HttpContext.RequestAborted);
+            var result = await analyzer.AnalyzeAsync(repo, request.Question.Trim(), deadline.Token);
             return Ok(new AnalyzeResponse(result.Report, result.Usage));
         }
-        catch (AiRateLimitException)
+        catch (Exception ex) when (ex is OperationCanceledException or TimeoutException
+                                   && !HttpContext.RequestAborted.IsCancellationRequested)
         {
+            logger.LogWarning(ex, "Analysis timed out");
+            return Problem(
+                statusCode: StatusCodes.Status504GatewayTimeout,
+                title: "AI model provider timed out",
+                detail: "The AI model provider is overloaded, please try again in a few minutes.");
+        }
+        catch (AiRateLimitException ex)
+        {
+            logger.LogWarning(ex, "AI model rate limit reached");
             return Problem(
                 statusCode: StatusCodes.Status429TooManyRequests,
                 title: "Limit reached",
-                detail: "Usage limits reached, please try again later.");
+                detail: "The AI model's usage limit was reached. Please try again later.");
         }
         catch (GeminiApiException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
         {
+            logger.LogWarning(ex, "AI model overloaded");
             return Problem(
                 statusCode: StatusCodes.Status503ServiceUnavailable,
-                title: "LLM provider overloaded",
-                detail: "LLM provider is overloaded, please try again in few minutes.");
+                title: "AI model provider unavailable",
+                detail: "The AI model provider is unavailable or overloaded, please try again in a few minutes.");
+        }
+        catch (GeminiApiException ex)
+        {
+            logger.LogWarning(ex, "AI model returned an error");
+            return Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "AI model provider error",
+                detail: "The AI model provider returned an error. Please try again in a moment.");
+        }
+        catch (GitHubNotFoundException ex)
+        {
+            logger.LogWarning(ex, "Repository not found");
+            return Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Repository not found",
+                detail: "The repository does not exist or is not public.");
+        }
+        catch (GitHubRateLimitException ex)
+        {
+            logger.LogWarning(ex, "GitHub rate limit reached");
+            return Problem(
+                statusCode: StatusCodes.Status429TooManyRequests,
+                title: "GitHub limit reached",
+                detail: "The GitHub API limit was reached. Please try again later.");
+        }
+        catch (GitHubApiException ex)
+        {
+            logger.LogWarning(ex, "GitHub API error");
+            return Problem(
+                statusCode: StatusCodes.Status502BadGateway,
+                title: "GitHub error",
+                detail: "GitHub API returned an error. Please try again later.");
         }
     }
 }

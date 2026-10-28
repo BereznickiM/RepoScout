@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
-import { analyze, AnalyzeError, type AnalysisUsage } from './api'
+import { analyze, AnalyzeError, SERVER_UNAVAILABLE_MESSAGE, type AnalysisUsage } from './api'
 import { renderMarkdown } from './markdown'
 
 const repoUrl = ref('')
@@ -187,7 +187,7 @@ async function submit() {
       error.value = e.message
       fieldErrors.value = e.fieldErrors ?? {}
     } else {
-      error.value = 'Something went wrong'
+      error.value = SERVER_UNAVAILABLE_MESSAGE
     }
   } finally {
     stopTimer()
