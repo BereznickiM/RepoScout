@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
+using RepoScout.Api.Controllers;
 using RepoScout.Api.GitHub;
 
 namespace RepoScout.Api.IntegrationTests;
@@ -110,7 +111,7 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.Equal(429, body.GetProperty("status").GetInt32());
         Assert.Equal("Limit reached", body.GetProperty("title").GetString());
-        Assert.Equal("Usage limits reached, please try again later.", body.GetProperty("detail").GetString());
+        Assert.Equal("The AI model's usage limit was reached. Please try again later.", body.GetProperty("detail").GetString());
         Assert.DoesNotContain("secret-model", raw);
         Assert.DoesNotContain("test-key", raw);
     }
@@ -141,19 +142,146 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         var raw = await response.Content.ReadAsStringAsync();
         var body = JsonDocument.Parse(raw).RootElement;
         Assert.Equal(503, body.GetProperty("status").GetInt32());
-        Assert.Equal("LLM provider overloaded", body.GetProperty("title").GetString());
-        Assert.Equal("LLM provider is overloaded, please try again in few minutes.", body.GetProperty("detail").GetString());
+        Assert.Equal("AI model provider unavailable", body.GetProperty("title").GetString());
+        Assert.Equal("The AI model provider is unavailable or overloaded, please try again in a few minutes.", body.GetProperty("detail").GetString());
+        Assert.DoesNotContain("test-key", raw);
+    }
+
+    private static async Task AssertProblem(
+        HttpResponseMessage response, HttpStatusCode status, string title, string? detail = null)
+    {
+        Assert.Equal(status, response.StatusCode);
+        var raw = await response.Content.ReadAsStringAsync();
+        var body = JsonDocument.Parse(raw).RootElement;
+        Assert.Equal((int)status, body.GetProperty("status").GetInt32());
+        Assert.Equal(title, body.GetProperty("title").GetString());
+        if (detail is not null)
+        {
+            Assert.Equal(detail, body.GetProperty("detail").GetString());
+        }
+
+        Assert.DoesNotContain("secret-detail", raw);
+        Assert.DoesNotContain("secret-model", raw);
+        Assert.DoesNotContain("secret-model.example", raw);
+        Assert.DoesNotContain("https://secret", raw);
         Assert.DoesNotContain("test-key", raw);
     }
 
     [Fact]
-    public async Task PostAnalyze_ProviderServerError500_StaysGenericInternalServerError()
+    public async Task PostAnalyze_ProviderServerError500_ReturnsBadGatewayAiModelProviderError()
     {
         var response = await PostWithThrowingClient(
-            new GeminiApiException(HttpStatusCode.InternalServerError, "Gemini returned 500"));
+            new GeminiApiException(HttpStatusCode.InternalServerError, "secret-detail https://secret-model.example"));
 
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
-        Assert.DoesNotContain("overloaded", await response.Content.ReadAsStringAsync());
+        await AssertProblem(response, HttpStatusCode.BadGateway, "AI model provider error",
+            "The AI model provider returned an error. Please try again in a moment.");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_ProviderErrorWithoutStatus_ReturnsBadGatewayAiModelProviderError()
+    {
+        var response = await PostWithThrowingClient(new GeminiApiException(null, "secret-detail"));
+
+        await AssertProblem(response, HttpStatusCode.BadGateway, "AI model provider error");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_GitHubNotFound_ReturnsNotFoundRepositoryNotFound()
+    {
+        var response = await PostWithThrowingClient(new GitHubNotFoundException("secret-detail"));
+
+        await AssertProblem(response, HttpStatusCode.NotFound, "Repository not found",
+            "The repository does not exist or is not public.");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_GitHubRateLimited_ReturnsTooManyRequestsGitHubLimitReached()
+    {
+        var response = await PostWithThrowingClient(
+            new GitHubRateLimitException(HttpStatusCode.Forbidden, "secret-detail", DateTimeOffset.UnixEpoch));
+
+        await AssertProblem(response, HttpStatusCode.TooManyRequests, "GitHub limit reached",
+            "The GitHub API limit was reached. Please try again later.");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_OtherGitHubError_ReturnsBadGatewayGitHubError()
+    {
+        var response = await PostWithThrowingClient(
+            new GitHubApiException(HttpStatusCode.InternalServerError, "secret-detail"));
+
+        await AssertProblem(response, HttpStatusCode.BadGateway, "GitHub error",
+            "GitHub API returned an error. Please try again later.");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_HttpClientTimeoutWhileClientConnected_ReturnsGatewayTimeout()
+    {
+        var response = await PostWithThrowingClient(
+            new TaskCanceledException("secret-detail", new TimeoutException("secret-detail")));
+
+        await AssertProblem(response, HttpStatusCode.GatewayTimeout, "AI model provider timed out",
+            "The AI model provider is overloaded, please try again in a few minutes.");
+    }
+
+    [Fact]
+    public async Task PostAnalyze_ModelNeverAnswersBeforeDeadline_ReturnsGatewayTimeout()
+    {
+        var original = AnalyzeController.AnalysisDeadline;
+        AnalyzeController.AnalysisDeadline = TimeSpan.FromMilliseconds(200);
+        try
+        {
+            var response = await PostWithChatClient(new BlockingChatClient());
+
+            await AssertProblem(response, HttpStatusCode.GatewayTimeout, "AI model provider timed out",
+                "The AI model provider is overloaded, please try again in a few minutes.");
+        }
+        finally
+        {
+            AnalyzeController.AnalysisDeadline = original;
+        }
+    }
+
+    [Fact]
+    public void AnalysisDeadline_Default_Is170Seconds()
+    {
+        Assert.Equal(TimeSpan.FromSeconds(170), AnalyzeController.AnalysisDeadline);
+    }
+
+    private async Task<HttpResponseMessage> PostWithChatClient(IChatClient chat)
+    {
+        using var client = _factory
+            .WithWebHostBuilder(b =>
+            {
+                b.UseSetting("AiModel:ApiKey", "test-key");
+                b.ConfigureTestServices(s =>
+                {
+                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
+                    s.AddSingleton(chat);
+                });
+            })
+            .CreateClient();
+        return await client.PostAsJsonAsync("/api/analyze", new { repoUrl = ValidUrl, question = "q" });
+    }
+
+    private sealed class BlockingChatClient : IChatClient
+    {
+        public async Task<ChatResponse> GetResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+            return new ChatResponse();
+        }
+
+        public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+            IEnumerable<ChatMessage> messages, ChatOptions? options = null, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public object? GetService(Type serviceType, object? serviceKey = null) => null;
+
+        public void Dispose()
+        {
+        }
     }
 
     private Task<HttpResponseMessage> Post(object body) => _client.PostAsJsonAsync("/api/analyze", body);
