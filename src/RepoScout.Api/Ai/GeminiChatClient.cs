@@ -65,18 +65,9 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
     }
 
     // Sends the request to the current model; on 429 moves on to the next configured model with the same history.
-    // An explicit ChatOptions.ModelId bypasses the fallback list.
     private async Task<(string Model, HttpResponseMessage Response)> SendAsync(
         List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
     {
-        if (chatOptions?.ModelId is { } explicitModel)
-        {
-            var explicitResponse = await TryPostAsync(explicitModel, history, chatOptions, cancellationToken);
-            return explicitResponse is null
-                ? throw new AiRateLimitException([explicitModel])
-                : (explicitModel, explicitResponse);
-        }
-
         while (currentModel < models.Count)
         {
             var model = models[currentModel];
@@ -170,37 +161,19 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         throw new NotSupportedException($"Unsupported chat role {message.Role}.");
     }
 
-    private static UserInputStep ToUserStep(ChatMessage message)
-    {
-        if (message.Contents.FirstOrDefault(c => c is not TextContent) is { } unsupported)
-        {
-            throw Unsupported(unsupported, "user");
-        }
+    private static UserInputStep ToUserStep(ChatMessage message) => new(message.Text);
 
-        return new UserInputStep(message.Text);
-    }
-
+    // Gemini requires its own steps (thoughts, signatures) to be replayed unchanged.
     private static IEnumerable<object> ToAssistantSteps(ChatMessage message)
-    {
-        // Gemini requires its own steps (thoughts, signatures) to be replayed unchanged.
-        if (message.RawRepresentation is IReadOnlyList<JsonElement> steps)
-        {
-            return steps.Cast<object>();
-        }
-
-        return message.Contents.Select<AIContent, object>(content => content switch
-        {
-            TextContent text => new ModelOutputStep([new TextPart(text.Text)]),
-            FunctionCallContent call => new FunctionCallStep(call.CallId, call.Name, call.Arguments ?? new Dictionary<string, object?>()),
-            _ => throw Unsupported(content, "assistant")
-        });
-    }
+        => message.RawRepresentation is IReadOnlyList<JsonElement> steps
+            ? steps.Cast<object>()
+            : throw new NotSupportedException("Assistant message without the raw Gemini steps cannot be replayed.");
 
     private static FunctionResultStep ToFunctionResultStep(AIContent content, IReadOnlyDictionary<string, string> callNames)
     {
         if (content is not FunctionResultContent result)
         {
-            throw Unsupported(content, "tool");
+            throw new NotSupportedException($"Unsupported content {content.GetType().Name} in tool message.");
         }
 
         if (!callNames.TryGetValue(result.CallId, out var name))
@@ -208,12 +181,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
             throw new InvalidOperationException($"No function_call for call_id {result.CallId}");
         }
 
-        var text = result.Result switch
-        {
-            string s => s,
-            JsonElement { ValueKind: JsonValueKind.String } e => e.GetString()!,
-            _ => JsonSerializer.Serialize(result.Result, JsonOptions)
-        };
+        var text = result.Result as string ?? result.Result?.ToString() ?? "";
         return new FunctionResultStep(name, result.CallId, [new TextPart(text)]);
     }
 
@@ -223,22 +191,17 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         var names = new Dictionary<string, string>();
         foreach (var message in messages.Where(m => m.Role == ChatRole.Assistant))
         {
-            if (message.RawRepresentation is IReadOnlyList<JsonElement> steps)
+            if (message.RawRepresentation is not IReadOnlyList<JsonElement> steps)
             {
-                foreach (var step in steps.Where(s => StepType(s) == "function_call"))
-                {
-                    if (step.TryGetProperty("id", out var id) && id.GetString() is { } callId
-                        && step.TryGetProperty("name", out var name) && name.GetString() is { } functionName)
-                    {
-                        names[callId] = functionName;
-                    }
-                }
+                continue;
             }
-            else
+
+            foreach (var step in steps.Where(s => StepType(s) == "function_call"))
             {
-                foreach (var call in message.Contents.OfType<FunctionCallContent>())
+                if (step.TryGetProperty("id", out var id) && id.GetString() is { } callId
+                    && step.TryGetProperty("name", out var name) && name.GetString() is { } functionName)
                 {
-                    names[call.CallId] = call.Name;
+                    names[callId] = functionName;
                 }
             }
         }
@@ -248,9 +211,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
 
     private static List<ToolDeclaration>? ToToolDeclarations(IList<AITool>? tools)
         => tools is { Count: > 0 }
-            ? tools.Select(tool => tool is AIFunction f
-                ? new ToolDeclaration(f.Name, f.Description, f.JsonSchema)
-                : throw new NotSupportedException($"Unsupported tool type {tool.GetType().Name}.")).ToList()
+            ? tools.OfType<AIFunction>().Select(f => new ToolDeclaration(f.Name, f.Description, f.JsonSchema)).ToList()
             : null;
 
     private static GenerationConfig ToGenerationConfig(ChatToolMode? toolMode) => toolMode switch
@@ -258,12 +219,8 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         null => new GenerationConfig(null, ThinkingLevel),
         AutoChatToolMode => new GenerationConfig("auto", ThinkingLevel),
         NoneChatToolMode => new GenerationConfig("none", ThinkingLevel),
-        RequiredChatToolMode { RequiredFunctionName: null } => new GenerationConfig("any", ThinkingLevel),
-        _ => throw new NotSupportedException("Requiring a specific tool is not supported.")
+        _ => throw new NotSupportedException("Only Auto and None tool modes are supported.")
     };
-
-    private static NotSupportedException Unsupported(AIContent content, string role)
-        => new($"Unsupported content {content.GetType().Name} in {role} message.");
 
     private static string? StepType(JsonElement step)
         => step.ValueKind == JsonValueKind.Object && step.TryGetProperty("type", out var t) ? t.GetString() : null;
@@ -315,16 +272,6 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
     private sealed record UserInputStep(string Content)
     {
         public string Type => "user_input";
-    }
-
-    private sealed record ModelOutputStep(List<TextPart> Content)
-    {
-        public string Type => "model_output";
-    }
-
-    private sealed record FunctionCallStep(string Id, string Name, IDictionary<string, object?> Arguments)
-    {
-        public string Type => "function_call";
     }
 
     private sealed record FunctionResultStep(string Name, string CallId, List<TextPart> Result)
