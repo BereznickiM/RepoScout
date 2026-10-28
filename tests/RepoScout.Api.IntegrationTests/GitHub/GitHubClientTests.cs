@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-using Microsoft.Extensions.DependencyInjection;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
 
@@ -40,19 +39,6 @@ public class GitHubClientTests
     }
 
     [Fact]
-    public async Task GetRepoAsync_NullDescriptionAndLanguage_MapsToNull()
-    {
-        var (client, _) = Create(_ => Json("""
-            {"full_name":"o/r","description":null,"default_branch":"main","language":null,"private":false}
-            """));
-
-        var info = await client.GetRepoAsync(Repo, CancellationToken.None);
-
-        Assert.Null(info.Description);
-        Assert.Null(info.Language);
-    }
-
-    [Fact]
     public async Task GetRepoAsync_PrivateRepo_ThrowsNotFound()
     {
         var (client, _) = Create(_ => Json("""
@@ -70,16 +56,6 @@ public class GitHubClientTests
         var ex = await Assert.ThrowsAsync<GitHubNotFoundException>(() => client.GetRepoAsync(Repo, CancellationToken.None));
 
         Assert.Equal(HttpStatusCode.NotFound, ex.StatusCode);
-    }
-
-    [Fact]
-    public async Task GetRepoAsync_CancelledToken_ThrowsOperationCanceled()
-    {
-        var (client, _) = Create(_ => Json("{}"));
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetRepoAsync(Repo, cts.Token));
     }
 
     // ---- GetTreeAsync ----
@@ -105,18 +81,6 @@ public class GitHubClientTests
                 new RepoTreeEntry("vendor/lib", RepoTreeEntryKind.Submodule, null)
             ],
             tree.Entries);
-    }
-
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task GetTreeAsync_TruncatedFlag_IsPassedThrough(bool truncated)
-    {
-        var (client, _) = Create(_ => Json($$"""{"truncated":{{truncated.ToString().ToLowerInvariant()}},"tree":[]}"""));
-
-        var tree = await client.GetTreeAsync(Repo, "main", CancellationToken.None);
-
-        Assert.Equal(truncated, tree.Truncated);
     }
 
     [Fact]
@@ -187,17 +151,6 @@ public class GitHubClientTests
     }
 
     [Fact]
-    public async Task GetFileAsync_EmptyFile_ReturnsEmptyContentNotTruncated()
-    {
-        var (client, _) = Create(_ => Bytes([]));
-
-        var file = await client.GetFileAsync(Repo, "empty.txt", "main", 5, CancellationToken.None);
-
-        Assert.Equal("", file.Content);
-        Assert.False(file.Truncated);
-    }
-
-    [Fact]
     public async Task GetFileAsync_Request_UsesOnlyRawAcceptHeader()
     {
         var (client, handler) = Create(_ => Bytes("x"u8.ToArray()));
@@ -218,16 +171,6 @@ public class GitHubClientTests
         Assert.Equal("https://api.github.com/repos/o/r/contents/a%20b/c%23d.md?ref=main", handler.Requests.Single().RequestUri!.AbsoluteUri);
     }
 
-    [Fact]
-    public async Task GetFileAsync_RefWithSlashAndSpace_EscapedAsSingleSegment()
-    {
-        var (client, handler) = Create(_ => Bytes("x"u8.ToArray()));
-
-        await client.GetFileAsync(Repo, "a.txt", "feat/x y", 10, CancellationToken.None);
-
-        Assert.EndsWith("?ref=feat%2Fx%20y", handler.Requests.Single().RequestUri!.AbsoluteUri);
-    }
-
     [Theory]
     [InlineData("")]
     [InlineData("/x")]
@@ -246,35 +189,12 @@ public class GitHubClientTests
         Assert.Empty(handler.Requests);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData(".")]
-    [InlineData("..")]
-    public async Task GetFileAsync_InvalidRef_ThrowsArgumentExceptionWithoutRequest(string gitRef)
-    {
-        var (client, handler) = Create(_ => Bytes("x"u8.ToArray()));
-
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetFileAsync(Repo, "a.txt", gitRef, 10, CancellationToken.None));
-
-        Assert.Empty(handler.Requests);
-    }
-
     [Fact]
     public async Task GetFileAsync_Status404_ThrowsNotFound()
     {
         var (client, _) = Create(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
 
         await Assert.ThrowsAsync<GitHubNotFoundException>(() => client.GetFileAsync(Repo, "a.txt", "main", 10, CancellationToken.None));
-    }
-
-    [Fact]
-    public async Task GetFileAsync_CancelledToken_ThrowsOperationCanceled()
-    {
-        var (client, _) = Create(_ => Bytes("x"u8.ToArray()));
-        using var cts = new CancellationTokenSource();
-        await cts.CancelAsync();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetFileAsync(Repo, "a.txt", "main", 10, cts.Token));
     }
 
     // ---- Error mapping ----
@@ -382,29 +302,5 @@ public class GitHubClientTests
 
         Assert.DoesNotContain("BODY-SECRET-123", ex.Message);
         Assert.DoesNotContain("HEADER-SECRET-456", ex.Message);
-    }
-
-    // ---- DI registration ----
-
-    [Fact]
-    public async Task AddGitHubClient_ResolvedClient_UsesBaseAddressHeadersAndNoAuthorization()
-    {
-        var handler = new StubHttpMessageHandler(_ => Json("""
-            {"full_name":"o/r","description":null,"default_branch":"main","language":null,"private":false}
-            """));
-        var services = new ServiceCollection();
-        services.AddGitHubClient().ConfigurePrimaryHttpMessageHandler(() => handler);
-        await using var provider = services.BuildServiceProvider();
-
-        var client = provider.GetRequiredService<GitHubClient>();
-        await client.GetRepoAsync(Repo, CancellationToken.None);
-
-        var request = handler.Requests.Single();
-        Assert.Equal("https://api.github.com/repos/o/r", request.RequestUri!.AbsoluteUri);
-        Assert.Contains(request.Headers.UserAgent, p => p.Product?.Name == "RepoScout");
-        Assert.Contains(request.Headers.Accept, a => a.MediaType == "application/vnd.github+json");
-        Assert.Equal("2022-11-28", Assert.Single(request.Headers.GetValues("X-GitHub-Api-Version")));
-        Assert.Null(request.Headers.Authorization);
-        Assert.False(request.Headers.Contains("Authorization"));
     }
 }

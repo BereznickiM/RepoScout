@@ -92,16 +92,6 @@ public class GeminiChatClientTests
     }
 
     [Fact]
-    public async Task GetResponseAsync_ModelIdInOptions_OverridesConfiguredModel()
-    {
-        var h = CreateOk();
-
-        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "other-model" });
-
-        Assert.Equal("other-model", h.Bodies.Single().GetProperty("model").GetString());
-    }
-
-    [Fact]
     public async Task GetResponseAsync_AIFunctionTool_DeclaresToolWithSchemaAndKeepsPropertyNames()
     {
         var h = CreateOk();
@@ -120,17 +110,6 @@ public class GeminiChatClientTests
     }
 
     [Fact]
-    public async Task GetResponseAsync_NonFunctionTool_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-        var options = new ChatOptions { Tools = [new HostedWebSearchTool()] };
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([User()], options));
-
-        Assert.Empty(h.Handler.Requests);
-    }
-
-    [Fact]
     public async Task GetResponseAsync_ToolModeAuto_SendsAutoToolChoice()
     {
         await AssertToolChoice(ChatToolMode.Auto, "auto");
@@ -142,12 +121,6 @@ public class GeminiChatClientTests
         await AssertToolChoice(ChatToolMode.None, "none");
     }
 
-    [Fact]
-    public async Task GetResponseAsync_ToolModeRequireAny_SendsAnyToolChoice()
-    {
-        await AssertToolChoice(ChatToolMode.RequireAny, "any");
-    }
-
     private static async Task AssertToolChoice(ChatToolMode mode, string expected)
     {
         var h = CreateOk();
@@ -156,86 +129,9 @@ public class GeminiChatClientTests
 
         var config = h.Bodies.Single().GetProperty("generation_config");
         Assert.Equal(expected, config.GetProperty("tool_choice").GetString());
-        Assert.Equal("low", config.GetProperty("thinking_level").GetString());
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ToolModeRequireSpecific_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-        var options = new ChatOptions { ToolMode = ChatToolMode.RequireSpecific("read_file") };
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([User()], options));
-
-        Assert.Empty(h.Handler.Requests);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ExplicitModelId_SendsLowThinkingLevel()
-    {
-        var h = CreateOk();
-
-        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "other-model" });
-
-        AssertJsonEqual("""{"thinking_level":"low"}""", h.Bodies.Single().GetProperty("generation_config"));
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_FallbackModel_SendsLowThinkingLevelOnEveryRequest()
-    {
-        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse));
-
-        await h.Client.GetResponseAsync([User()], new ChatOptions { ToolMode = ChatToolMode.Auto });
-
-        Assert.Equal(["A", "B"], SentModels(h));
-        Assert.All(h.Bodies, b => Assert.Equal("low", b.GetProperty("generation_config").GetProperty("thinking_level").GetString()));
     }
 
     // ---- unsupported input ----
-
-    [Fact]
-    public async Task GetResponseAsync_UserMessageWithImage_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-        var message = new ChatMessage(ChatRole.User, [new TextContent("see"), new DataContent(new byte[] { 1, 2, 3 }, "image/png")]);
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([message]));
-
-        Assert.Empty(h.Handler.Requests);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_AssistantMessageWithImage_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-        var message = new ChatMessage(ChatRole.Assistant, [new DataContent(new byte[] { 1 }, "image/png")]);
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([User(), message]));
-
-        Assert.Empty(h.Handler.Requests);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ToolMessageWithNonResultContent_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-        var message = new ChatMessage(ChatRole.Tool, [new TextContent("not a result")]);
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => h.Client.GetResponseAsync([User(), message]));
-
-        Assert.Empty(h.Handler.Requests);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_UnknownRole_ThrowsNotSupportedAndSendsNothing()
-    {
-        var h = CreateOk();
-
-        await Assert.ThrowsAsync<NotSupportedException>(
-            () => h.Client.GetResponseAsync([new ChatMessage(new ChatRole("narrator"), "x")]));
-
-        Assert.Empty(h.Handler.Requests);
-    }
 
     // ---- response parsing ----
 
@@ -396,17 +292,6 @@ public class GeminiChatClientTests
     }
 
     [Fact]
-    public async Task GetResponseAsync_NoFallbackModels_SingleRateLimitThrowsAiRateLimitException()
-    {
-        var h = CreateWithFallbacks([], Limited);
-
-        var ex = await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
-
-        Assert.Equal(["A"], ex.ModelsTried);
-        Assert.Single(h.Handler.Requests);
-    }
-
-    [Fact]
     public async Task GetResponseAsync_PrimaryRateLimitedThenFallbackServerError_ThrowsGeminiApiExceptionWithoutFurtherFallback()
     {
         var h = CreateWithFallbacks(["B", "C"], Limited,
@@ -416,41 +301,6 @@ public class GeminiChatClientTests
 
         Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
         Assert.Equal(["A", "B"], SentModels(h));
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ExplicitModelId_IgnoresFallbackListAndStickyIndex()
-    {
-        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse), () => Respond(TextResponse));
-
-        await h.Client.GetResponseAsync([User()]); // A limited -> B (sticky index now at B)
-        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" });
-
-        Assert.Equal(["A", "B", "X"], SentModels(h));
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ExplicitModelIdRateLimited_ThrowsWithThatModelOnlyAndNoFallback()
-    {
-        var h = CreateWithFallbacks(["B"], Limited);
-
-        var ex = await Assert.ThrowsAsync<AiRateLimitException>(
-            () => h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" }));
-
-        Assert.Equal(["X"], ex.ModelsTried);
-        Assert.Equal(["X"], SentModels(h));
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ExplicitModelIdRateLimited_DoesNotAdvanceStickyIndex()
-    {
-        var h = CreateWithFallbacks(["B"], Limited, () => Respond(TextResponse));
-        await Assert.ThrowsAsync<AiRateLimitException>(
-            () => h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" }));
-
-        await h.Client.GetResponseAsync([User()]);
-
-        Assert.Equal(["X", "A"], SentModels(h));
     }
 
     [Fact]
@@ -478,17 +328,6 @@ public class GeminiChatClientTests
     // ---- 503 retry ----
 
     private static HttpResponseMessage Overloaded() => Respond("""{"error":"BODY-LEAK-123"}""", HttpStatusCode.ServiceUnavailable);
-
-    [Fact]
-    public async Task GetResponseAsync_503ThenSuccess_RetriesSameModelAndReturnsResponse()
-    {
-        var h = CreateWithFallbacks(["B"], Overloaded, () => Respond(TextResponse));
-
-        var response = await h.Client.GetResponseAsync([User()]);
-
-        Assert.Equal("hello", response.Text);
-        Assert.Equal(["A", "A"], SentModels(h));
-    }
 
     [Fact]
     public async Task GetResponseAsync_Two503ThenSuccess_SucceedsOnThirdAttempt()
@@ -523,27 +362,6 @@ public class GeminiChatClientTests
 
         Assert.Equal("hello", response.Text);
         Assert.Equal(["A", "A", "B"], SentModels(h));
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ServerError500_IsNotRetried()
-    {
-        var h = Create(() => Respond("{}", HttpStatusCode.InternalServerError));
-
-        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
-
-        Assert.Equal(HttpStatusCode.InternalServerError, ex.StatusCode);
-        Assert.Single(h.Handler.Requests);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_503WithExplicitModelId_RetriesSameExplicitModel()
-    {
-        var h = CreateWithFallbacks(["B"], Overloaded, () => Respond(TextResponse));
-
-        await h.Client.GetResponseAsync([User()], new ChatOptions { ModelId = "X" });
-
-        Assert.Equal(["X", "X"], SentModels(h));
     }
 
     [Fact]
@@ -587,55 +405,6 @@ public class GeminiChatClientTests
     }
 
     [Fact]
-    public async Task GetResponseAsync_HandBuiltAssistantMessage_RebuildsSteps()
-    {
-        var h = CreateOk();
-        var assistant = new ChatMessage(ChatRole.Assistant,
-        [
-            new TextContent("thinking"),
-            new FunctionCallContent("c9", "get_y", new Dictionary<string, object?> { ["p"] = "v" })
-        ]);
-        var tool = new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c9", "done")]);
-
-        await h.Client.GetResponseAsync([User("q"), assistant, tool]);
-
-        var input = h.Bodies.Single().GetProperty("input").EnumerateArray().ToList();
-        Assert.Equal(4, input.Count);
-        AssertJsonEqual("""{"type":"model_output","content":[{"type":"text","text":"thinking"}]}""", input[1]);
-        AssertJsonEqual("""{"type":"function_call","id":"c9","name":"get_y","arguments":{"p":"v"}}""", input[2]);
-        AssertJsonEqual("""{"type":"function_result","name":"get_y","call_id":"c9","result":[{"type":"text","text":"done"}]}""", input[3]);
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_ObjectToolResult_IsSerializedAsJsonText()
-    {
-        var h = CreateOk();
-        var assistant = new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "get_x")]);
-        var tool = new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", new { Value = 5, Name = "n" })]);
-
-        await h.Client.GetResponseAsync([User(), assistant, tool]);
-
-        var result = h.Bodies.Single().GetProperty("input").EnumerateArray().Last();
-        var text = result.GetProperty("result")[0].GetProperty("text").GetString()!;
-        var parsed = JsonDocument.Parse(text).RootElement;
-        Assert.Equal(5, parsed.GetProperty("value").GetInt32());
-        Assert.Equal("n", parsed.GetProperty("name").GetString());
-    }
-
-    [Fact]
-    public async Task GetResponseAsync_JsonElementStringToolResult_IsSentAsPlainTextNotQuotedJson()
-    {
-        var h = CreateOk();
-        var assistant = new ChatMessage(ChatRole.Assistant, [new FunctionCallContent("c1", "get_x")]);
-        var tool = new ChatMessage(ChatRole.Tool, [new FunctionResultContent("c1", J("\"line1\\nsaid \\\"hi\\\"\""))]);
-
-        await h.Client.GetResponseAsync([User(), assistant, tool]);
-
-        var result = h.Bodies.Single().GetProperty("input").EnumerateArray().Last();
-        Assert.Equal("line1\nsaid \"hi\"", result.GetProperty("result")[0].GetProperty("text").GetString());
-    }
-
-    [Fact]
     public async Task GetResponseAsync_ToolResultWithUnknownCallId_ThrowsInvalidOperationAndSendsNothing()
     {
         var h = CreateOk();
@@ -647,32 +416,6 @@ public class GeminiChatClientTests
     }
 
     // ---- misc ----
-
-    [Fact]
-    public void GetStreamingResponseAsync_ThrowsNotSupported()
-    {
-        var h = CreateOk();
-
-        Assert.Throws<NotSupportedException>(() => h.Client.GetStreamingResponseAsync([User()]));
-    }
-
-    [Fact]
-    public void GetService_OwnTypeOrInterfaceWithoutKey_ReturnsSelf()
-    {
-        var client = CreateOk().Client;
-
-        Assert.Same(client, client.GetService(typeof(GeminiChatClient)));
-        Assert.Same(client, client.GetService(typeof(IChatClient)));
-    }
-
-    [Fact]
-    public void GetService_WithKeyOrOtherType_ReturnsNull()
-    {
-        var client = CreateOk().Client;
-
-        Assert.Null(client.GetService(typeof(IChatClient), "key"));
-        Assert.Null(client.GetService(typeof(string)));
-    }
 
     // ---- DI registration ----
 

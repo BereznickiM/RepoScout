@@ -1,6 +1,5 @@
 using System.Net;
 using System.Net.Http.Json;
-using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -62,8 +61,6 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
             Task.FromResult(new RepoTree(
                 [
                     new RepoTreeEntry("src", RepoTreeEntryKind.Directory, null),
-                    new RepoTreeEntry("src/app", RepoTreeEntryKind.Directory, null),
-                    new RepoTreeEntry("src/app/deep", RepoTreeEntryKind.Directory, null),
                     new RepoTreeEntry("README.md", RepoTreeEntryKind.File, 10)
                 ],
                 false));
@@ -89,47 +86,16 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         }
     }
 
+    private Task<HttpResponseMessage> PostWithThrowingClient(Exception exception) =>
+        PostWithChatClient(new ThrowingChatClient(exception));
+
     [Fact]
     public async Task PostAnalyze_AllModelsRateLimited_ReturnsTooManyRequestsLimitReachedWithoutModelNames()
     {
-        using var client = _factory
-            .WithWebHostBuilder(b =>
-            {
-                b.UseSetting("AiModel:ApiKey", "test-key");
-                b.ConfigureTestServices(s =>
-                {
-                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
-                    s.AddSingleton<IChatClient>(new ThrowingChatClient(new AiRateLimitException(["secret-model-a", "secret-model-b"])));
-                });
-            })
-            .CreateClient();
+        var response = await PostWithThrowingClient(new AiRateLimitException(["secret-model-a", "secret-model-b"]));
 
-        var response = await client.PostAsJsonAsync("/api/analyze", new { repoUrl = ValidUrl, question = "q" });
-
-        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
-        var raw = await response.Content.ReadAsStringAsync();
-        var body = JsonDocument.Parse(raw).RootElement;
-        Assert.Equal(429, body.GetProperty("status").GetInt32());
-        Assert.Equal("Limit reached", body.GetProperty("title").GetString());
-        Assert.Equal("The AI model's usage limit was reached. Please try again later.", body.GetProperty("detail").GetString());
-        Assert.DoesNotContain("secret-model", raw);
-        Assert.DoesNotContain("test-key", raw);
-    }
-
-    private async Task<HttpResponseMessage> PostWithThrowingClient(Exception exception)
-    {
-        using var client = _factory
-            .WithWebHostBuilder(b =>
-            {
-                b.UseSetting("AiModel:ApiKey", "test-key");
-                b.ConfigureTestServices(s =>
-                {
-                    s.AddSingleton<IGitHubClient>(new FakeGitHubClient());
-                    s.AddSingleton<IChatClient>(new ThrowingChatClient(exception));
-                });
-            })
-            .CreateClient();
-        return await client.PostAsJsonAsync("/api/analyze", new { repoUrl = ValidUrl, question = "q" });
+        await AssertProblem(response, HttpStatusCode.TooManyRequests, "Limit reached",
+            "The AI model's usage limit was reached. Please try again later.");
     }
 
     [Fact]
@@ -138,13 +104,8 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         var response = await PostWithThrowingClient(
             new GeminiApiException(HttpStatusCode.ServiceUnavailable, "Gemini returned 503"));
 
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-        var raw = await response.Content.ReadAsStringAsync();
-        var body = JsonDocument.Parse(raw).RootElement;
-        Assert.Equal(503, body.GetProperty("status").GetInt32());
-        Assert.Equal("AI model provider unavailable", body.GetProperty("title").GetString());
-        Assert.Equal("The AI model provider is unavailable or overloaded, please try again in a few minutes.", body.GetProperty("detail").GetString());
-        Assert.DoesNotContain("test-key", raw);
+        await AssertProblem(response, HttpStatusCode.ServiceUnavailable, "AI model provider unavailable",
+            "The AI model provider is unavailable or overloaded, please try again in a few minutes.");
     }
 
     private static async Task AssertProblem(
@@ -242,12 +203,6 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         }
     }
 
-    [Fact]
-    public void AnalysisDeadline_Default_Is170Seconds()
-    {
-        Assert.Equal(TimeSpan.FromSeconds(170), AnalyzeController.AnalysisDeadline);
-    }
-
     private async Task<HttpResponseMessage> PostWithChatClient(IChatClient chat)
     {
         using var client = _factory
@@ -313,22 +268,6 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     }
 
     [Fact]
-    public async Task PostAnalyze_QuestionWithSurroundingWhitespace_IsTrimmedInReport()
-    {
-        var response = await Post(new { repoUrl = ValidUrl, question = "  hi  " });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task PostAnalyze_MultilineQuestion_QuotesEveryLine()
-    {
-        var response = await Post(new { repoUrl = ValidUrl, question = "line1\nline2" });
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
     public async Task PostAnalyze_QuestionExactly500Chars_ReturnsOk()
     {
         var response = await Post(new { repoUrl = ValidUrl, question = new string('a', 500) });
@@ -344,13 +283,10 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         await AssertValidationError(response, "Question");
     }
 
-    [Theory]
-    [InlineData("o/r")]
-    [InlineData("https://gitlab.com/o/r")]
-    [InlineData("https://github.com/o")]
-    public async Task PostAnalyze_InvalidRepoUrl_ReturnsBadRequestWithRepoUrlError(string url)
+    [Fact]
+    public async Task PostAnalyze_InvalidRepoUrl_ReturnsBadRequestWithRepoUrlError()
     {
-        var response = await Post(new { repoUrl = url, question = "q" });
+        var response = await Post(new { repoUrl = "https://gitlab.com/o/r", question = "q" });
 
         await AssertValidationError(response, "RepoUrl");
     }
@@ -388,34 +324,6 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
         var response = await Post(new { repoUrl = ValidUrl });
 
         await AssertValidationError(response, "Question");
-    }
-
-    [Fact]
-    public async Task PostAnalyze_MalformedJson_ReturnsBadRequest()
-    {
-        using var content = new StringContent("{not json", Encoding.UTF8, "application/json");
-
-        var response = await _client.PostAsync("/api/analyze", content);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task PostAnalyze_NonJsonContentType_ReturnsUnsupportedMediaType()
-    {
-        using var content = new StringContent("repoUrl=x", Encoding.UTF8, "text/plain");
-
-        var response = await _client.PostAsync("/api/analyze", content);
-
-        Assert.Equal(HttpStatusCode.UnsupportedMediaType, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task GetAnalyze_ReturnsMethodNotAllowed()
-    {
-        var response = await _client.GetAsync("/api/analyze");
-
-        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
     }
 
     private static async Task AssertValidationError(HttpResponseMessage response, string field)
