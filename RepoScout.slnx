@@ -4,5 +4,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/RepoScout.Api.IntegrationTests/RepoScout.Api.IntegrationTests.csproj" />
+    <Project Path="tests/RepoScout.Api.UnitTests/RepoScout.Api.UnitTests.csproj" />
   </Folder>
 </Solution>

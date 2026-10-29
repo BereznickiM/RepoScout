@@ -1,4 +1,4 @@
-namespace RepoScout.Api.IntegrationTests.GitHub;
+namespace RepoScout.Api.UnitTests.GitHub;
 
 public sealed class StubHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
 {

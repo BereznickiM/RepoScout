@@ -4,7 +4,7 @@ using System.Text;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
 
-namespace RepoScout.Api.IntegrationTests.GitHub;
+namespace RepoScout.Api.UnitTests.GitHub;
 
 public class GitHubClientTests
 {

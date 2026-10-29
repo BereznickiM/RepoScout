@@ -1,6 +1,6 @@
 using RepoScout.Api.Analysis;
 
-namespace RepoScout.Api.IntegrationTests;
+namespace RepoScout.Api.UnitTests;
 
 public class GitHubRepoUrlTests
 {
