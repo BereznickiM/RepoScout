@@ -42,7 +42,10 @@ public class AnalysisOptionsTests
     {
         var options = new AnalysisOptions
         {
-            Deadline = TimeSpan.Parse(deadline), MaxToolCalls = 20, MaxResultBytes = 12000, MaxDepth = 2,
+            Deadline = TimeSpan.Parse(deadline),
+            MaxToolCalls = 20,
+            MaxResultBytes = 12000,
+            MaxDepth = 2,
         };
 
         var error = Assert.Single(Validate(options));
