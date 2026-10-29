@@ -7,6 +7,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddOptions<AnalysisOptions>()
+    .BindConfiguration(AnalysisOptions.SectionName)
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
 builder.Services.AddScoped<IRepoAnalyzer, RepoAgent>();
 builder.Services.AddGitHubClient();
 builder.Services.AddGeminiChatClient();

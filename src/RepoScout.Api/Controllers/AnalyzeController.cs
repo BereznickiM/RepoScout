@@ -1,5 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
+using RepoScout.Api.Agent;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
@@ -8,11 +10,9 @@ namespace RepoScout.Api.Controllers;
 
 [ApiController]
 [Route("api/analyze")]
-public class AnalyzeController(IRepoAnalyzer analyzer, ILogger<AnalyzeController> logger) : ControllerBase
+public class AnalyzeController(
+    IRepoAnalyzer analyzer, IOptions<AnalysisOptions> options, ILogger<AnalyzeController> logger) : ControllerBase
 {
-    /// <summary>Overall analysis deadline. Settable so tests can shorten it.</summary>
-    public static TimeSpan AnalysisDeadline { get; set; } = TimeSpan.FromSeconds(170);
-
     [HttpPost]
     public async Task<IActionResult> Post(AnalyzeRequest request)
     {
@@ -23,7 +23,7 @@ public class AnalyzeController(IRepoAnalyzer analyzer, ILogger<AnalyzeController
         }
 
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(HttpContext.RequestAborted);
-        deadline.CancelAfter(AnalysisDeadline);
+        deadline.CancelAfter(options.Value.Deadline);
 
         try
         {
