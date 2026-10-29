@@ -8,9 +8,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddOptions<AnalysisOptions>()
-    .BindConfiguration(AnalysisOptions.SectionName)
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
+    .BindConfiguration(AnalysisOptions.SectionName);
 builder.Services.AddScoped<IRepoAnalyzer, RepoAgent>();
 builder.Services.AddGitHubClient();
 builder.Services.AddGeminiChatClient();
