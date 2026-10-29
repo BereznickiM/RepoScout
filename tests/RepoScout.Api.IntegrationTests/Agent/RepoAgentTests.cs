@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using RepoScout.Api.Agent;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
@@ -86,7 +87,18 @@ public class RepoAgentTests
         RepoInfo? info = null) =>
         new(info ?? Info(), new RepoTree(entries ?? [FileEntry("README.md")], truncated)) { File = file };
 
-    private static RepoAgent Agent(IChatClient chat, IGitHubClient github) => new(chat, github, NullLogger<RepoAgent>.Instance);
+    private static RepoAgent Agent(IChatClient chat, IGitHubClient github) =>
+        new(
+            chat,
+            github,
+            Options.Create(new AnalysisOptions
+            {
+                Deadline = TimeSpan.FromSeconds(170),
+                MaxToolCalls = 20,
+                MaxResultBytes = 12_000,
+                MaxDepth = 2
+            }),
+            NullLogger<RepoAgent>.Instance);
 
     private static ChatResponse Text(string text) => new(new ChatMessage(ChatRole.Assistant, text));
 

@@ -7,7 +7,6 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
-using RepoScout.Api.Controllers;
 using RepoScout.Api.GitHub;
 
 namespace RepoScout.Api.IntegrationTests;
@@ -188,27 +187,19 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     [Fact]
     public async Task PostAnalyze_ModelNeverAnswersBeforeDeadline_ReturnsGatewayTimeout()
     {
-        var original = AnalyzeController.AnalysisDeadline;
-        AnalyzeController.AnalysisDeadline = TimeSpan.FromMilliseconds(200);
-        try
-        {
-            var response = await PostWithChatClient(new BlockingChatClient());
+        var response = await PostWithChatClient(new BlockingChatClient(), "00:00:00.200");
 
-            await AssertProblem(response, HttpStatusCode.GatewayTimeout, "AI model provider timed out",
-                "The AI model provider is overloaded, please try again in a few minutes.");
-        }
-        finally
-        {
-            AnalyzeController.AnalysisDeadline = original;
-        }
+        await AssertProblem(response, HttpStatusCode.GatewayTimeout, "AI model provider timed out",
+            "The AI model provider is overloaded, please try again in a few minutes.");
     }
 
-    private async Task<HttpResponseMessage> PostWithChatClient(IChatClient chat)
+    private async Task<HttpResponseMessage> PostWithChatClient(IChatClient chat, string? deadline = null)
     {
         using var client = _factory
             .WithWebHostBuilder(b =>
             {
                 b.UseSetting("AiModel:ApiKey", "test-key");
+                if (deadline is not null) b.UseSetting("Analysis:Deadline", deadline);
                 b.ConfigureTestServices(s =>
                 {
                     s.AddSingleton<IGitHubClient>(new FakeGitHubClient());

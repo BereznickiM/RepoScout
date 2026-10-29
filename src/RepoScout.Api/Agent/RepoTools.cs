@@ -8,28 +8,28 @@ namespace RepoScout.Api.Agent;
 // Read-only tools over one repository, created per analysis.
 public sealed class RepoTools
 {
-    private const int MaxResultBytes = 12_000;
-    private const int MaxDepth = 2;
     private const int MaxListEntries = 300;
 
     private readonly IGitHubClient _github;
     private readonly RepoRef _repo;
     private readonly string _gitRef;
+    private readonly AnalysisOptions _limits;
     private RepoTree? _tree;
 
-    public RepoTools(IGitHubClient github, RepoRef repo, string gitRef)
+    public RepoTools(IGitHubClient github, RepoRef repo, string gitRef, AnalysisOptions limits)
     {
         _github = github;
         _repo = repo;
         _gitRef = gitRef;
+        _limits = limits;
         Functions =
         [
             AIFunctionFactory.Create(
                 (string path = "", CancellationToken ct = default) => ListFilesAsync(path, ct), "list_files",
-                $"Lists files and directories under path (repo root if empty), up to {MaxDepth} levels deep. Noise directories are hidden."),
+                $"Lists files and directories under path (repo root if empty), up to {_limits.MaxDepth} levels deep. Noise directories are hidden."),
             AIFunctionFactory.Create(
                 (string path, CancellationToken ct = default) => ReadFileAsync(path, ct), "read_file",
-                $"Returns the content of a file (first {MaxResultBytes:N0} bytes).")
+                $"Returns the content of a file (first {_limits.MaxResultBytes:N0} bytes).")
         ];
     }
 
@@ -49,7 +49,7 @@ public sealed class RepoTools
             var prefix = path.Length == 0 ? "" : path + "/";
             var entries = tree.Entries
                 .Where(e => e.Path.StartsWith(prefix, StringComparison.Ordinal)
-                    && e.Path.Count(c => c == '/') - prefix.Count(c => c == '/') < MaxDepth
+                    && e.Path.Count(c => c == '/') - prefix.Count(c => c == '/') < _limits.MaxDepth
                     && !NoiseFilter.IsNoise(e.Path))
                 .OrderBy(e => e.Path.Replace('/', '\0'), StringComparer.Ordinal) // keeps children right after their parent
                 .ToList();
@@ -110,7 +110,7 @@ public sealed class RepoTools
                 return $"Error: {path} is a directory; use list_files";
             }
 
-            var file = await _github.GetFileAsync(_repo, path, _gitRef, MaxResultBytes, ct);
+            var file = await _github.GetFileAsync(_repo, path, _gitRef, _limits.MaxResultBytes, ct);
             if (file.Content.Contains('\0'))
             {
                 return "Error: binary file";
@@ -119,7 +119,7 @@ public sealed class RepoTools
             var content = file.Content;
             if (file.Truncated)
             {
-                content += $"\n[truncated at {MaxResultBytes} bytes]";
+                content += $"\n[truncated at {_limits.MaxResultBytes} bytes]";
             }
 
             return Wrap("read_file", path, content);
