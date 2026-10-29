@@ -9,14 +9,15 @@ namespace RepoScout.Api.Ai;
 
 public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> options, ILogger<GeminiChatClient> logger) : IChatClient
 {
-    // Primary model first, then fallbacks. The index is sticky: once a model is rate-limited it is not retried.
+    // Primary model first, then fallbacks. The index is sticky: once a model fails (429 or persistent 503) it is not retried.
     private readonly List<string> models = new[] { options.Value.Model }.Concat(options.Value.FallbackModels)
         .Select(m => m?.Trim() ?? "").Where(m => m.Length > 0).Distinct().ToList();
 
     private int currentModel;
+    private HttpStatusCode lastFailure = HttpStatusCode.TooManyRequests;
 
     private const string ThinkingLevel = "low";
-    private const int MaxAttempts = 3; // 1 + 2 retries on 503
+    private const int MaxAttempts = 2; // 1 + 1 retry on 503
 
     public TimeSpan RetryBaseDelay { get; init; } = TimeSpan.FromSeconds(1);
 
@@ -64,7 +65,7 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
         };
     }
 
-    // Sends the request to the current model; on 429 moves on to the next configured model with the same history.
+    // Sends the request to the current model; on 429 or persistent 503 moves on to the next configured model with the same history.
     private async Task<(string Model, HttpResponseMessage Response)> SendAsync(
         List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
     {
@@ -80,11 +81,13 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
             currentModel++;
         }
 
-        throw new AiRateLimitException(models);
+        throw lastFailure == HttpStatusCode.ServiceUnavailable
+            ? new GeminiApiException(lastFailure, "Gemini returned 503")
+            : new AiRateLimitException(models);
     }
 
-    // Posts to one model. Returns null when it is rate-limited (429); retries 503 (overloaded) on the same model
-    // with backoff; throws on any other failure, including a 503 that persists after the last attempt.
+    // Posts to one model. Returns null when it is rate-limited (429) or still unavailable (503) after one retry
+    // with backoff, so the caller can fall back; throws on any other failure.
     // Hand-rolled on purpose: a generic resilience handler would also retry 429 and defeat the model fallback.
     private async Task<HttpResponseMessage?> TryPostAsync(
         string model, List<ChatMessage> history, ChatOptions? chatOptions, CancellationToken cancellationToken)
@@ -106,14 +109,22 @@ public sealed class GeminiChatClient(HttpClient http, IOptions<AiModelOptions> o
             if (status == HttpStatusCode.TooManyRequests)
             {
                 logger.LogWarning("Model {Model} is rate-limited (429).", model);
+                lastFailure = status;
                 return null;
             }
 
-            if (status == HttpStatusCode.ServiceUnavailable && attempt < MaxAttempts)
+            if (status == HttpStatusCode.ServiceUnavailable)
             {
-                logger.LogWarning("Model {Model} unavailable (503), retry {Attempt}/{Max}", model, attempt, MaxAttempts - 1);
-                await Task.Delay(RetryDelay(attempt), cancellationToken);
-                continue;
+                if (attempt < MaxAttempts)
+                {
+                    logger.LogWarning("Model {Model} unavailable (503), retry {Attempt}/{Max}", model, attempt, MaxAttempts - 1);
+                    await Task.Delay(RetryDelay(attempt), cancellationToken);
+                    continue;
+                }
+
+                logger.LogWarning("Model {Model} still unavailable (503) after retry.", model);
+                lastFailure = status;
+                return null;
             }
 
             throw new GeminiApiException(status, $"Gemini returned {(int)status}");

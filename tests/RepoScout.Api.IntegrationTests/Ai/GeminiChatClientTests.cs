@@ -228,7 +228,7 @@ public class GeminiChatClientTests
         Assert.Single(h.Handler.Requests);
     }
 
-    // ---- model fallback on 429 ----
+    // ---- model fallback on 429/503 ----
 
     private static HttpResponseMessage Limited() => Respond("""{"error":"BODY-LEAK-123"}""", HttpStatusCode.TooManyRequests);
 
@@ -325,32 +325,89 @@ public class GeminiChatClientTests
         Assert.Equal("B", response.ModelId);
     }
 
-    // ---- 503 retry ----
+    // ---- 503 retry and fallback ----
 
     private static HttpResponseMessage Overloaded() => Respond("""{"error":"BODY-LEAK-123"}""", HttpStatusCode.ServiceUnavailable);
 
     [Fact]
-    public async Task GetResponseAsync_Two503ThenSuccess_SucceedsOnThirdAttempt()
+    public async Task GetResponseAsync_503ThenSuccess_RetriesOnSameModel()
     {
-        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, () => Respond(TextResponse));
+        var h = CreateWithFallbacks(["B"], Overloaded, () => Respond(TextResponse));
 
         var response = await h.Client.GetResponseAsync([User()]);
 
         Assert.Equal("hello", response.Text);
-        Assert.Equal(["A", "A", "A"], SentModels(h));
+        Assert.Equal(["A", "A"], SentModels(h));
     }
 
     [Fact]
-    public async Task GetResponseAsync_Persistent503_ThrowsGeminiApiExceptionAfterThreeRequestsWithoutFallback()
+    public async Task GetResponseAsync_Persistent503OnPrimary_FallsBackToNextModelWithSameInput()
     {
-        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, Overloaded);
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, () => Respond(TextResponse));
+
+        var response = await h.Client.GetResponseAsync([User("same question")]);
+
+        Assert.Equal("hello", response.Text);
+        Assert.Equal(["A", "A", "B"], SentModels(h));
+        Assert.True(JsonElement.DeepEquals(h.Bodies[0].GetProperty("input"), h.Bodies[2].GetProperty("input")));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_After503Fallback_NextCallStartsOnFallbackModel()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, () => Respond(TextResponse), () => Respond(TextResponse));
+
+        await h.Client.GetResponseAsync([User()]);
+        await h.Client.GetResponseAsync([User()]);
+
+        Assert.Equal(["A", "A", "B", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_SingleModelPersistent503_ThrowsGeminiApiExceptionAfterTwoRequestsWithoutLeaks()
+    {
+        var h = Create(Overloaded, Overloaded);
 
         var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
-        Assert.Equal(["A", "A", "A"], SentModels(h));
+        Assert.Equal(2, h.Handler.Requests.Count);
         Assert.DoesNotContain("BODY-LEAK-123", ex.Message);
         Assert.DoesNotContain(ApiKey, ex.Message);
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_RateLimitThenPersistent503OnLastModel_ThrowsGeminiApiException503()
+    {
+        var h = CreateWithFallbacks(["B"], Limited, Overloaded, Overloaded);
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+        Assert.Equal(["A", "B", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_Persistent503ThenRateLimitOnLastModel_ThrowsAiRateLimitException()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, Limited);
+
+        var ex = await Assert.ThrowsAsync<AiRateLimitException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(["A", "B"], ex.ModelsTried);
+        Assert.Equal(["A", "A", "B"], SentModels(h));
+    }
+
+    [Fact]
+    public async Task GetResponseAsync_AfterExhaustionBy503_ThrowsGeminiApiExceptionWithoutHttpRequest()
+    {
+        var h = CreateWithFallbacks(["B"], Overloaded, Overloaded, Overloaded, Overloaded);
+        await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        var ex = await Assert.ThrowsAsync<GeminiApiException>(() => h.Client.GetResponseAsync([User()]));
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, ex.StatusCode);
+        Assert.Equal(4, h.Handler.Requests.Count);
     }
 
     [Fact]
