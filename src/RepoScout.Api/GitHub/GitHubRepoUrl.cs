@@ -1,7 +1,8 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.RegularExpressions;
+using RepoScout.Api.Analysis;
 
-namespace RepoScout.Api.Analysis;
+namespace RepoScout.Api.GitHub;
 
 public static partial class GitHubRepoUrl
 {
