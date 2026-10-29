@@ -6,7 +6,7 @@ using RepoScout.Api.Agent;
 using RepoScout.Api.Analysis;
 using RepoScout.Api.GitHub;
 
-namespace RepoScout.Api.IntegrationTests.Agent;
+namespace RepoScout.Api.UnitTests.Agent;
 
 public class RepoAgentTests
 {

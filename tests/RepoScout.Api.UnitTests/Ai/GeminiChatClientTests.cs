@@ -7,9 +7,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using RepoScout.Api.Ai;
-using RepoScout.Api.IntegrationTests.GitHub;
+using RepoScout.Api.UnitTests.GitHub;
 
-namespace RepoScout.Api.IntegrationTests.Ai;
+namespace RepoScout.Api.UnitTests.Ai;
 
 public class GeminiChatClientTests
 {

@@ -1,6 +1,6 @@
 using RepoScout.Api.Agent;
 
-namespace RepoScout.Api.IntegrationTests.Agent;
+namespace RepoScout.Api.UnitTests.Agent;
 
 public class NoiseFilterTests
 {
