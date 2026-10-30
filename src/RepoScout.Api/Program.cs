@@ -1,11 +1,14 @@
 using RepoScout.Api.Agent;
 using RepoScout.Api.Ai;
 using RepoScout.Api.Analysis;
+using RepoScout.Api.Controllers;
 using RepoScout.Api.GitHub;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
+builder.Services.AddProblemDetails();
+builder.Services.AddExceptionHandler<ApiExceptionHandler>();
 builder.Services.AddOpenApi();
 builder.Services.AddOptions<AnalysisOptions>()
     .BindConfiguration(AnalysisOptions.SectionName)
@@ -16,6 +19,8 @@ builder.Services.AddGitHubClient();
 builder.Services.AddGeminiChatClient();
 
 var app = builder.Build();
+
+app.UseExceptionHandler();
 
 if (app.Environment.IsDevelopment())
 {
