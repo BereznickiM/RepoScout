@@ -146,6 +146,20 @@ public class AnalyzeEndpointTests : IClassFixture<WebApplicationFactory<Program>
     }
 
     [Fact]
+    public async Task PostAnalyze_UnmappedException_ReturnsInternalServerErrorProblemWithoutLeaks()
+    {
+        var response = await PostWithThrowingClient(new InvalidOperationException("secret-detail"));
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        var raw = await response.Content.ReadAsStringAsync();
+        Assert.Equal(500, JsonDocument.Parse(raw).RootElement.GetProperty("status").GetInt32());
+        Assert.DoesNotContain("secret-detail", raw);
+        Assert.DoesNotContain("InvalidOperationException", raw);
+        Assert.DoesNotContain(" at RepoScout", raw);
+    }
+
+    [Fact]
     public async Task PostAnalyze_GitHubNotFound_ReturnsNotFoundRepositoryNotFound()
     {
         var response = await PostWithThrowingClient(new GitHubNotFoundException("secret-detail"));
