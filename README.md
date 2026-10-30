@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/BereznickiM/RepoScout/actions/workflows/ci.yml/badge.svg)](https://github.com/BereznickiM/RepoScout/actions/workflows/ci.yml)
 
-**Ask anything about a public GitHub repo and get an evidence-backed answer. An AI agent explores the code through the GitHub API, decides what to inspect, and cites the files behind every claim. Agent loop with a provider-agnostic LLM layer, tool budgets and prompt-injection hardening.**
+**Ask anything about a public GitHub repo and get an evidence-backed answer.
+An AI agent explores the code through the GitHub API, decides what to inspect, and cites the files behind every claim.
+Agent loop with a provider-agnostic LLM layer, tool budgets and prompt-injection hardening.**
 
 **Deployed at:** https://repo-scout-web.vercel.app
 
